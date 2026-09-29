@@ -1,0 +1,97 @@
+name: Monthly Database Update
+
+on:
+  schedule:
+    # Runs on the 2nd day of every month at 03:00 UTC
+    - cron: '0 3 2 * *'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag name (e.g. v2026.10)'
+        required: false
+        default: ''
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install .
+
+      - name: Determine Release Tag
+        id: vars
+        run: |
+          if [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            echo "TAG=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "TAG=v$(date +'%Y.%m')" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download Upstream LITE Datasets
+        env:
+          TOKEN: ${{ secrets.IP2LOCATION_DOWNLOAD_TOKEN }}
+        run: |
+          mkdir -p raw_data dist
+          echo "Downloading IP2Location LITE DB5..."
+          curl -sSL "https://www.ip2location.com/download/?token=${TOKEN}&file=DB5LITECSV" -o raw_data/db5.zip
+          unzip -q -o raw_data/db5.zip -d raw_data/
+          
+          echo "Downloading IP2Proxy LITE PX10..."
+          curl -sSL "https://www.ip2location.com/download/?token=${TOKEN}&file=PX10LITECSV" -o raw_data/px10.zip
+          unzip -q -o raw_data/px10.zip -d raw_data/
+
+      - name: Compile GRLG Databases
+        run: |
+          DB5_FILE=$(find raw_data -name "*DB5*.CSV" -o -name "*db5*.csv" | head -n 1)
+          PX10_FILE=$(find raw_data -name "*PX10*.CSV" -o -name "*px10*.csv" | head -n 1)
+          
+          echo "Found DB5:  $DB5_FILE"
+          echo "Found PX10: $PX10_FILE"
+          
+          echo "1. Compiling Unified Full Database..."
+          python -m grlg.cli compile --mode full --db5 "$DB5_FILE" --px10 "$PX10_FILE" --out dist/goldsrc_geo_full.bin
+          
+          echo "2. Compiling Proxy-Only Database..."
+          python -m grlg.cli compile --mode proxy --px10 "$PX10_FILE" --out dist/goldsrc_proxy_only.bin
+          
+          echo "3. Compiling Geo-Only Database..."
+          python -m grlg.cli compile --mode geo --db5 "$DB5_FILE" --out dist/goldsrc_geo_only.bin
+
+      - name: Generate SHA256 Checksums
+        run: |
+          cd dist
+          sha256sum *.bin *.bin.gz > checksums.txt
+          cat checksums.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.TAG }}
+          name: "GRLG GeoIP & Threat Database ${{ steps.vars.outputs.TAG }}"
+          body: |
+            ## Automated Monthly GRLG Database Release (${{ steps.vars.outputs.TAG }})
+            
+            Compiled binary assets for high-performance zero-copy GeoIP and Proxy/VPN threat intelligence.
+            
+            ### Included Artifacts
+            - `goldsrc_geo_full.bin.gz` (~44 MB) — **Unified Full**: Country, Region, City, Lat/Lon + Proxy, Datacenter, Botnet, ASN, ISP.
+            - `goldsrc_proxy_only.bin.gz` (~12 MB) — **Proxy-Only**: DCH, VPN, Botnet, Spam, Scanner, ASN, ISP.
+            - `goldsrc_geo_only.bin.gz` (~19 MB) — **Geo-Only**: Country, Region, City, Lat/Lon.
+            
+            ### Attribution
+            This site or product includes IP2Location LITE data available from [https://lite.ip2location.com](https://lite.ip2location.com).
+          files: |
+            dist/*.bin.gz
+            dist/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
