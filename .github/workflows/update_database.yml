@@ -14,6 +14,8 @@ on:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -43,20 +45,26 @@ jobs:
         run: |
           mkdir -p raw_data dist
           echo "Downloading IP2Location LITE DB5..."
-          curl -sSL "https://www.ip2location.com/download/?token=${TOKEN}&file=DB5LITECSV" -o raw_data/db5.zip
+          curl -sSL "https://www.ip2location.com/download?token=${TOKEN}&file=DB5LITECSV" -o raw_data/db5.zip
           unzip -q -o raw_data/db5.zip -d raw_data/
           
           echo "Downloading IP2Proxy LITE PX10..."
-          curl -sSL "https://www.ip2location.com/download/?token=${TOKEN}&file=PX10LITECSV" -o raw_data/px10.zip
+          curl -sSL "https://www.ip2location.com/download?token=${TOKEN}&file=PX10LITECSV" -o raw_data/px10.zip
           unzip -q -o raw_data/px10.zip -d raw_data/
 
       - name: Compile GRLG Databases
         run: |
-          DB5_FILE=$(find raw_data -name "*DB5*.CSV" -o -name "*db5*.csv" | head -n 1)
-          PX10_FILE=$(find raw_data -name "*PX10*.CSV" -o -name "*px10*.csv" | head -n 1)
+          DB5_FILE=$(find raw_data -type f -iname "*db5*.csv" | head -n 1)
+          PX10_FILE=$(find raw_data -type f -iname "*px10*.csv" | head -n 1)
           
           echo "Found DB5:  $DB5_FILE"
           echo "Found PX10: $PX10_FILE"
+          
+          if [ -z "$DB5_FILE" ] || [ -z "$PX10_FILE" ]; then
+            echo "Error: Datasets not found in raw_data!"
+            ls -la raw_data/
+            exit 1
+          fi
           
           echo "1. Compiling Unified Full Database..."
           python -m grlg.cli compile --mode full --db5 "$DB5_FILE" --px10 "$PX10_FILE" --out dist/goldsrc_geo_full.bin
