@@ -26,8 +26,9 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
+      - name: Install dependencies and tools
         run: |
+          sudo apt-get update && sudo apt-get install -y zstd
           pip install .
 
       - name: Determine Release Tag
@@ -52,7 +53,7 @@ jobs:
           curl -sSL "https://www.ip2location.com/download?token=${TOKEN}&file=PX10LITECSV" -o raw_data/px10.zip
           unzip -q -o raw_data/px10.zip -d raw_data/
 
-      - name: Compile GRLG Databases
+      - name: Compile IPAtlas Databases
         run: |
           DB5_FILE=$(find raw_data -type f -iname "*db5*.csv" | head -n 1)
           PX10_FILE=$(find raw_data -type f -iname "*px10*.csv" | head -n 1)
@@ -66,39 +67,40 @@ jobs:
             exit 1
           fi
           
-          echo "1. Compiling Unified Full Database..."
-          python -m grlg.cli compile --mode full --db5 "$DB5_FILE" --px10 "$PX10_FILE" --out dist/goldsrc_geo_full.bin
+          echo "1. Compiling Unified Full Database (V4 Profile Normalization)..."
+          python -m ipatlas.cli compile --mode full --geo "$DB5_FILE" --proxy "$PX10_FILE" --out dist/ipatlas_full.bin
           
           echo "2. Compiling Proxy-Only Database..."
-          python -m grlg.cli compile --mode proxy --px10 "$PX10_FILE" --out dist/goldsrc_proxy_only.bin
+          python -m ipatlas.cli compile --mode proxy --proxy "$PX10_FILE" --out dist/ipatlas_proxy.bin
           
           echo "3. Compiling Geo-Only Database..."
-          python -m grlg.cli compile --mode geo --db5 "$DB5_FILE" --out dist/goldsrc_geo_only.bin
+          python -m ipatlas.cli compile --mode geo --geo "$DB5_FILE" --out dist/ipatlas_geo.bin
 
       - name: Generate SHA256 Checksums
         run: |
           cd dist
-          sha256sum *.bin *.bin.gz > checksums.txt
+          sha256sum *.bin *.bin.gz *.bin.zst > checksums.txt
           cat checksums.txt
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.vars.outputs.TAG }}
-          name: "GRLG GeoIP & Threat Database ${{ steps.vars.outputs.TAG }}"
+          name: "IPAtlas GeoIP & Threat Database ${{ steps.vars.outputs.TAG }}"
           body: |
-            ## Automated Monthly GRLG Database Release (${{ steps.vars.outputs.TAG }})
+            ## Automated Monthly IPAtlas Database Release (${{ steps.vars.outputs.TAG }})
             
             Compiled binary assets for high-performance zero-copy GeoIP and Proxy/VPN threat intelligence.
             
             ### Included Artifacts
-            - `goldsrc_geo_full.bin.gz` (~44 MB) — **Unified Full**: Country, Region, City, Lat/Lon + Proxy, Datacenter, Botnet, ASN, ISP.
-            - `goldsrc_proxy_only.bin.gz` (~12 MB) — **Proxy-Only**: DCH, VPN, Botnet, Spam, Scanner, ASN, ISP.
-            - `goldsrc_geo_only.bin.gz` (~19 MB) — **Geo-Only**: Country, Region, City, Lat/Lon.
+            - `ipatlas_full.bin.zst` (~27 MB) / `.bin.gz` (~35 MB) — **Unified Full**: Country, Region, City, Lat/Lon + Proxy, Datacenter, Botnet, ASN, ISP (V4 Profile Normalization).
+            - `ipatlas_proxy.bin.zst` (~9 MB) / `.bin.gz` (~12 MB) — **Proxy-Only**: DCH, VPN, Botnet, Spam, Scanner, ASN, ISP.
+            - `ipatlas_geo.bin.zst` (~14 MB) / `.bin.gz` (~19 MB) — **Geo-Only**: Country, Region, City, Lat/Lon.
             
             ### Attribution
             This site or product includes IP2Location LITE data available from [https://lite.ip2location.com](https://lite.ip2location.com).
           files: |
+            dist/*.bin.zst
             dist/*.bin.gz
             dist/checksums.txt
         env:
