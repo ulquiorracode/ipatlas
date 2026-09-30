@@ -47,8 +47,11 @@ class TestGrlg(unittest.TestCase):
         )
         
         self.assertEqual(stats["records"], 5)
+        self.assertEqual(stats["profiles"], 4)
         self.assertTrue(os.path.exists(out_bin))
         self.assertTrue(os.path.exists(out_bin + ".gz"))
+        if stats["zst_size"]:
+            self.assertTrue(os.path.exists(out_bin + ".zst"))
         
         with GrlgReader(out_bin) as reader:
             # 1. Clean residential US

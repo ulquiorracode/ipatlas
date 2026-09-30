@@ -82,12 +82,14 @@ def main():
         if not os.path.exists(args.database):
             sys.exit(f"Database not found: {args.database}")
         with GrlgReader(args.database) as reader:
-            mode_str = {1: "Proxy-Only", 2: "Geo-Only", 3: "Unified Full"}.get(reader.version, "Unknown")
+            mode_str = {1: "Proxy-Only", 2: "Geo-Only", 3: "Unified Full (V3 Legacy)", 4: "Unified Full (V4 Normalized)"}.get(reader.version, "Unknown")
             size_mb = os.path.getsize(args.database) / (1024 * 1024)
             print(f"Database:      {args.database}")
             print(f"Format:        GRLG Version {reader.version} ({mode_str})")
             print(f"Records:       {reader.total_records:,}")
             print(f"Record Size:   {reader.record_size} bytes")
+            if getattr(reader, 'total_profiles', 0) > 0:
+                print(f"Profiles:      {reader.total_profiles:,}")
             print(f"Indexed Cities: {len(reader._city_offsets):,}")
             print(f"Indexed Regions:{len(reader._region_offsets):,}")
             print(f"Indexed ISPs:  {len(reader._isp_offsets):,}")

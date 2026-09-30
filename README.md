@@ -25,11 +25,14 @@ Designed for high-throughput network engines, game servers (GoldSrc, Source, Rus
 
 Tested on raw IP2Location LITE DB5 and IP2Proxy LITE PX10 datasets:
 
-| Database Mode | Source CSV | Binary (`.bin`) | Compressed (`.bin.gz`) | Ratio | Records | Lookup Latency |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Unified Full (DB5 + PX10)** | 775 MB | 214.1 MB | **43.8 MB** | **17.7x** | 7,946,419 | **< 1.0 µs** |
-| **Geo-Only (DB5)** | 293 MB | 57.7 MB | **18.8 MB** | **15.6x** | 2,999,603 | **< 0.8 µs** |
-| **Proxy-Only (PX10)** | 482 MB | 48.7 MB | **11.6 MB** | **41.5x** | 2,429,915 | **< 0.8 µs** |
+| Database Mode | Source CSV | Binary (`.bin`) | Gzip (`.gz`) | Zstandard (`.zst`) | Ratio (vs .zst) | Records | Profiles |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Unified Full V4 (DB5 + PX10)** | 740 MB | **95.9 MB** *(was 214 MB)* | **35.4 MB** | **27.6 MB** | **26.8x** | 7,946,419 | 159,501 |
+| **Geo-Only (DB5)** | 280 MB | 57.7 MB | 18.8 MB | — | 15.6x | 2,999,603 | — |
+| **Proxy-Only (PX10)** | 460 MB | 48.7 MB | 11.6 MB | — | 41.5x | 2,429,915 | — |
+
+> [!NOTE]
+> **Version 4 Profile Normalization**: In Unified Full mode, 7.95 million ranges map onto only 159,501 unique metadata profiles `(Country, City, Region, ASN, ISP, Flags, Lat, Lon)`. Each range is reduced from **28 bytes to 12 bytes**, shrinking the uncompressed zero-copy mmap binary by **55.2%** (from 214 MB to 95.9 MB).
 
 ---
 
@@ -127,20 +130,24 @@ with GrlgReader("goldsrc_geo_full.bin") as reader:
 
 All multi-byte integers are stored in **Little-Endian** format (`<`).
 
-### Full Unified Layout (Version 3)
-
-- **Header (60 bytes)**:
+### Full Unified Layout (Version 4 with Profile Normalization)
+- **Header (68 bytes)**:
   - `magic` (4B): `b'GRLG'`
-  - `version` (2B): `0x0003`
+  - `version` (2B): `0x0004`
   - `total_records` (4B): `uint32`
-  - `record_size` (2B): `28`
+  - `record_size` (2B): `12`
+  - `profile_count` (4B): `uint32` (e.g. 159,501)
+  - `profile_offset` (4B): `uint32`
   - `city_count` (4B), `c_idx_off` (4B), `c_data_off` (4B), `c_data_len` (4B)
   - `reg_count` (4B), `r_idx_off` (4B), `r_data_off` (4B), `r_data_len` (4B)
   - `isp_count` (4B), `i_idx_off` (4B), `i_data_off` (4B), `i_data_len` (4B)
 
-- **Record Structure (28 bytes)**:
+- **Range Record Structure (12 bytes)**:
   - `ip_from` (4B, `uint32`)
   - `ip_to` (4B, `uint32`)
+  - `profile_id` (4B, `uint32`)
+
+- **Profile Record Structure (20 bytes)**:
   - `city_idx` (4B, `uint32`)
   - `asn` (4B, `uint32`)
   - `country` (2B, `char[2]`)

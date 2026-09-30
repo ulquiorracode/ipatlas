@@ -172,6 +172,20 @@ def _compile_full(db5_path: str, px10_path: str, bin_out_path: str, log: Callabl
     if prev is not None:
         coalesced.append(prev)
 
+    # Build Profile ID normalization dictionary
+    prof_map = {}
+    prof_list = []
+    ranges_v4 = []
+    
+    for r in coalesced:
+        ip_from, ip_to, city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon = r
+        p_key = (city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon)
+        if p_key not in prof_map:
+            prof_map[p_key] = len(prof_list)
+            prof_list.append(p_key)
+        prof_id = prof_map[p_key]
+        ranges_v4.append((ip_from, ip_to, prof_id))
+
     # Serialize string blobs
     cities_blob = bytearray()
     city_offsets = []
@@ -194,10 +208,12 @@ def _compile_full(db5_path: str, px10_path: str, bin_out_path: str, log: Callabl
         isps_blob.extend(isp.encode('utf-8'))
         isps_blob.append(0)
         
-    header_size = 60 # 60 bytes header
-    records_size = len(coalesced) * 28 # 28 bytes per record
+    header_size = 68 # 68 bytes header (with prof_count, prof_offset)
+    records_size = len(ranges_v4) * 12 # 12 bytes per IP range
+    prof_size = len(prof_list) * 20 # 20 bytes per unique profile
     
-    c_idx_off = header_size + records_size
+    prof_offset = header_size + records_size
+    c_idx_off = prof_offset + prof_size
     c_idx_len = len(city_offsets) * 4
     c_data_off = c_idx_off + c_idx_len
     c_data_len = len(cities_blob)
@@ -215,11 +231,13 @@ def _compile_full(db5_path: str, px10_path: str, bin_out_path: str, log: Callabl
     os.makedirs(os.path.dirname(os.path.abspath(bin_out_path)), exist_ok=True)
     with open(bin_out_path, 'wb') as f:
         f.write(struct.pack(
-            '<4sHIHIIIIIIIIIIII',
+            '<4sHIHIIIIIIIIIIIIII',
             b'GRLG',
-            3, # version 3 = Full Unified
-            len(coalesced),
-            28, # record size
+            4, # version 4 = Full Unified with Profile ID Normalization
+            len(ranges_v4),
+            12, # record size = 12 bytes
+            len(prof_list),
+            prof_offset,
             len(cities_list),
             c_idx_off, c_data_off, c_data_len,
             len(regions_list),
@@ -227,9 +245,12 @@ def _compile_full(db5_path: str, px10_path: str, bin_out_path: str, log: Callabl
             len(isps_list),
             i_idx_off, i_data_off, i_data_len
         ))
-        for r in coalesced:
-            ip_from, ip_to, city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon = r
-            f.write(struct.pack('<IIII2sHHHhh', ip_from, ip_to, city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon))
+        for r in ranges_v4:
+            f.write(struct.pack('<III', r[0], r[1], r[2]))
+            
+        for p in prof_list:
+            city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon = p
+            f.write(struct.pack('<II2sHHHhh', city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon))
             
         for off in city_offsets: f.write(struct.pack('<I', off))
         f.write(cities_blob)
@@ -244,22 +265,38 @@ def _compile_full(db5_path: str, px10_path: str, bin_out_path: str, log: Callabl
         compressed = zlib.compress(f_in.read(), level=9)
         f_out.write(compressed)
     gz_size = os.path.getsize(gz_path)
+    
+    # Try compressing with zstd if available
+    zst_size = None
+    zst_path = bin_out_path + ".zst"
+    try:
+        import subprocess
+        res = subprocess.run(['zstd', '-19', '-f', bin_out_path, '-o', zst_path], capture_output=True)
+        if res.returncode == 0 and os.path.exists(zst_path):
+            zst_size = os.path.getsize(zst_path)
+    except Exception:
+        zst_size = None
+
     total_csv_size = os.path.getsize(db5_path) + os.path.getsize(px10_path)
     
     elapsed = time.time() - start
     stats = {
         "mode": "full",
-        "records": len(coalesced),
+        "records": len(ranges_v4),
+        "profiles": len(prof_list),
         "cities": len(cities_list),
         "regions": len(regions_list),
         "isps": len(isps_list),
         "raw_size": raw_size,
         "gz_size": gz_size,
+        "zst_size": zst_size,
         "csv_size": total_csv_size,
         "compression_ratio": round(total_csv_size / gz_size, 2),
+        "zst_ratio": round(total_csv_size / zst_size, 2) if zst_size else None,
         "elapsed_seconds": round(elapsed, 2)
     }
-    log(f"Compiled {len(coalesced):,} intervals in {elapsed:.2f}s | Binary: {raw_size/(1024*1024):.1f} MB | GZ: {gz_size/(1024*1024):.1f} MB ({stats['compression_ratio']}x)")
+    zst_msg = f" | ZST: {zst_size/(1024*1024):.1f} MB ({stats['zst_ratio']}x)" if zst_size else ""
+    log(f"Compiled {len(ranges_v4):,} intervals ({len(prof_list):,} profiles) in {elapsed:.2f}s | Binary: {raw_size/(1024*1024):.1f} MB | GZ: {gz_size/(1024*1024):.1f} MB ({stats['compression_ratio']}x){zst_msg}")
     return stats
 
 def _compile_proxy_only(px10_path: str, bin_out_path: str, log: Callable) -> dict:

@@ -80,10 +80,33 @@ class GrlgReader:
             raise ValueError(f"Invalid GRLG magic: {magic}")
         self.version = ver
         
-        if self.version == 3: # Full Unified (60 bytes header)
+        if self.version == 4: # Full Unified with Profile ID Normalization (68 bytes header)
+            hdr = struct.unpack('<4sHIHIIIIIIIIIIIIII', self._mm[:68])
+            self.total_records = hdr[2]
+            self.record_size = hdr[3]
+            self.total_profiles = hdr[4]
+            self.prof_offset = hdr[5]
+            self.header_size = 68
+            
+            c_cnt, c_i_off, c_d_off, c_d_len = hdr[6], hdr[7], hdr[8], hdr[9]
+            r_cnt, r_i_off, r_d_off, r_d_len = hdr[10], hdr[11], hdr[12], hdr[13]
+            i_cnt, i_i_off, i_d_off, i_d_len = hdr[14], hdr[15], hdr[16], hdr[17]
+            
+            self._city_offsets = [struct.unpack('<I', self._mm[c_i_off + i*4:c_i_off + (i+1)*4])[0] for i in range(c_cnt)]
+            self._city_blob = self._mm[c_d_off:c_d_off + c_d_len]
+            
+            self._region_offsets = [struct.unpack('<I', self._mm[r_i_off + i*4:r_i_off + (i+1)*4])[0] for i in range(r_cnt)]
+            self._region_blob = self._mm[r_d_off:r_d_off + r_d_len]
+            
+            self._isp_offsets = [struct.unpack('<I', self._mm[i_i_off + i*4:i_i_off + (i+1)*4])[0] for i in range(i_cnt)]
+            self._isp_blob = self._mm[i_d_off:i_d_off + i_d_len]
+
+        elif self.version == 3: # Full Unified Legacy (60 bytes header)
             hdr = struct.unpack('<4sHIHIIIIIIIIIIII', self._mm[:60])
             self.total_records = hdr[2]
             self.record_size = hdr[3]
+            self.total_profiles = 0
+            self.prof_offset = 0
             self.header_size = 60
             
             c_cnt, c_i_off, c_d_off, c_d_len = hdr[4], hdr[5], hdr[6], hdr[7]
@@ -103,6 +126,8 @@ class GrlgReader:
             hdr = struct.unpack('<4sHIHIIIIIIII', self._mm[:44])
             self.total_records = hdr[2]
             self.record_size = hdr[3]
+            self.total_profiles = 0
+            self.prof_offset = 0
             self.header_size = 44
             
             c_cnt, c_i_off, c_d_off, c_d_len = hdr[4], hdr[5], hdr[6], hdr[7]
@@ -120,6 +145,8 @@ class GrlgReader:
             hdr = struct.unpack('<4sHIHIIIIIIII', self._mm[:44])
             self.total_records = hdr[2]
             self.record_size = hdr[3]
+            self.total_profiles = 0
+            self.prof_offset = 0
             self.header_size = 44
             
             c_cnt, c_i_off, c_d_off, c_d_len = hdr[4], hdr[5], hdr[6], hdr[7]
@@ -171,26 +198,38 @@ class GrlgReader:
             mid = (low + high) // 2
             offset = self.header_size + mid * self.record_size
             
-            if self.version == 3: # Full Unified (28 bytes)
-                ip_from, ip_to, city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon = struct.unpack(
-                    '<IIII2sHHHhh', self._mm[offset:offset+28]
-                )
-            elif self.version == 1: # Proxy Only (20 bytes)
-                ip_from, ip_to, asn, city_idx, isp_idx, cc, flags = struct.unpack(
-                    '<IIIHH2sH', self._mm[offset:offset+20]
-                )
-                reg_idx, lat, lon = 0, 0, 0
-            else: # Geo Only (20 bytes)
-                ip_from, ip_to, city_idx, cc, reg_idx, lat, lon = struct.unpack(
-                    '<III2sHhh', self._mm[offset:offset+20]
-                )
-                asn, isp_idx, flags = 0, 0, 0
+            if self.version == 4: # Full Unified V4 (12 bytes per range)
+                ip_from, ip_to, prof_id = struct.unpack('<III', self._mm[offset:offset+12])
+            elif self.version == 3: # Full Unified Legacy (28 bytes)
+                ip_from, ip_to = struct.unpack('<II', self._mm[offset:offset+8])
+            else: # Proxy / Geo Only (20 bytes)
+                ip_from, ip_to = struct.unpack('<II', self._mm[offset:offset+8])
 
             if target < ip_from:
                 high = mid - 1
             elif target > ip_to:
                 low = mid + 1
             else:
+                if self.version == 4:
+                    p_off = self.prof_offset + prof_id * 20
+                    city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon = struct.unpack(
+                        '<II2sHHHhh', self._mm[p_off:p_off+20]
+                    )
+                elif self.version == 3:
+                    ip_from, ip_to, city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon = struct.unpack(
+                        '<IIII2sHHHhh', self._mm[offset:offset+28]
+                    )
+                elif self.version == 1: # Proxy Only
+                    ip_from, ip_to, asn, city_idx, isp_idx, cc, flags = struct.unpack(
+                        '<IIIHH2sH', self._mm[offset:offset+20]
+                    )
+                    reg_idx, lat, lon = 0, 0, 0
+                else: # Geo Only
+                    ip_from, ip_to, city_idx, cc, reg_idx, lat, lon = struct.unpack(
+                        '<III2sHhh', self._mm[offset:offset+20]
+                    )
+                    asn, isp_idx, flags = 0, 0, 0
+
                 return GeoRecord(
                     ip=ip_str,
                     ip_from=ip_from,
