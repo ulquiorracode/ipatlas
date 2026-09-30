@@ -3,19 +3,21 @@ import os
 import socket
 import struct
 import unittest
-from grlg.compiler import compile_database
-from grlg.reader import GrlgReader
+from ipatlas.compiler import compile_database
+from ipatlas.reader import IpAtlasReader, GrlgReader
 
 def ip2int(ip_str: str) -> int:
     return struct.unpack('!I', socket.inet_aton(ip_str))[0]
 
-class TestGrlg(unittest.TestCase):
+class TestIpAtlas(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.tmp_path = self.temp_dir.name
         
         self.db5_path = os.path.join(self.tmp_path, "test_db5.csv")
         self.px10_path = os.path.join(self.tmp_path, "test_px10.csv")
+        self.db1_path = os.path.join(self.tmp_path, "test_db1.csv")
+        self.px1_path = os.path.join(self.tmp_path, "test_px1.csv")
         
         # DB5: ip_from, ip_to, cc, country_name, region, city, lat, lon
         db5_lines = [
@@ -27,12 +29,25 @@ class TestGrlg(unittest.TestCase):
             f.writelines(db5_lines)
             
         # PX10: ip_from, ip_to, proxy_type, cc, country_name, region, city, isp, domain, usage_type, asn, as_name, last_seen, threat
-        # One proxy overlaps inside Tokyo range: 1.0.20.0 - 1.0.20.255
         px10_lines = [
             f'{ip2int("1.0.20.0")},{ip2int("1.0.20.255")},PUB,JP,Japan,Tokyo,Tokyo,DataCenter Host,dc.jp,DCH,13335,CLOUDFLARE,2026-09-01,BOTNET\n',
         ]
         with open(self.px10_path, "w", encoding="utf-8") as f:
             f.writelines(px10_lines)
+
+        # DB1 (only 4 columns): ip_from, ip_to, cc, country_name
+        db1_lines = [
+            f'{ip2int("2.0.0.0")},{ip2int("2.0.255.255")},DE,Germany\n',
+        ]
+        with open(self.db1_path, "w", encoding="utf-8") as f:
+            f.writelines(db1_lines)
+
+        # PX1 (only 5 columns): ip_from, ip_to, proxy_type, cc, country_name
+        px1_lines = [
+            f'{ip2int("2.0.50.0")},{ip2int("2.0.50.255")},VPN,DE,Germany\n',
+        ]
+        with open(self.px1_path, "w", encoding="utf-8") as f:
+            f.writelines(px1_lines)
 
     def tearDown(self):
         self.temp_dir.cleanup()
@@ -42,8 +57,8 @@ class TestGrlg(unittest.TestCase):
         stats = compile_database(
             mode="full",
             output_path=out_bin,
-            db5_path=self.db5_path,
-            px10_path=self.px10_path,
+            db_path=self.db5_path,
+            px_path=self.px10_path,
         )
         
         self.assertEqual(stats["records"], 5)
@@ -53,7 +68,7 @@ class TestGrlg(unittest.TestCase):
         if stats["zst_size"]:
             self.assertTrue(os.path.exists(out_bin + ".zst"))
         
-        with GrlgReader(out_bin) as reader:
+        with IpAtlasReader(out_bin) as reader:
             # 1. Clean residential US
             res_us = reader.lookup("1.0.5.10")
             self.assertIsNotNone(res_us)
@@ -90,17 +105,34 @@ class TestGrlg(unittest.TestCase):
             self.assertFalse(res_ru.flags.is_proxy)
 
             # 5. IP outside ranges
-            self.assertIsNone(reader.lookup("2.2.2.2"))
+            self.assertIsNone(reader.lookup("8.8.8.8"))
+
+    def test_compile_db1_px1_heterogeneous(self):
+        """Tests compilation of minimal DB1 and PX1 datasets without city/coords/threat columns."""
+        out_bin = os.path.join(self.tmp_path, "minimal.bin")
+        stats = compile_database(
+            mode="full",
+            output_path=out_bin,
+            db_path=self.db1_path,
+            px_path=self.px1_path,
+        )
+        self.assertEqual(stats["records"], 3)
+        with IpAtlasReader(out_bin) as reader:
+            rec = reader.lookup("2.0.50.1")
+            self.assertIsNotNone(rec)
+            self.assertEqual(rec.country, "DE")
+            self.assertTrue(rec.flags.is_proxy)
+            self.assertEqual(rec.city, "")
 
     def test_compile_geo_only(self):
         out_bin = os.path.join(self.tmp_path, "geo_only.bin")
         stats = compile_database(
             mode="geo",
             output_path=out_bin,
-            db5_path=self.db5_path,
+            db_path=self.db5_path,
         )
         self.assertEqual(stats["records"], 3)
-        with GrlgReader(out_bin) as reader:
+        with IpAtlasReader(out_bin) as reader:
             rec = reader.lookup("1.0.40.1")
             self.assertIsNotNone(rec)
             self.assertEqual(rec.country, "RU")
@@ -111,10 +143,10 @@ class TestGrlg(unittest.TestCase):
         stats = compile_database(
             mode="proxy",
             output_path=out_bin,
-            px10_path=self.px10_path,
+            px_path=self.px10_path,
         )
         self.assertEqual(stats["records"], 1)
-        with GrlgReader(out_bin) as reader:
+        with GrlgReader(out_bin) as reader: # Test backwards compatibility alias
             rec = reader.lookup("1.0.20.100")
             self.assertIsNotNone(rec)
             self.assertEqual(rec.isp, "DataCenter Host")
