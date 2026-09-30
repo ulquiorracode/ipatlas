@@ -1,7 +1,7 @@
 # IPAtlas
 
-[![CI](https://github.com/ulquiorracode/grlg-geo/actions/workflows/ci.yml/badge.svg)](https://github.com/ulquiorracode/grlg-geo/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/ulquiorracode/grlg-geo?color=blue&label=version)](https://github.com/ulquiorracode/grlg-geo/releases)
+[![CI](https://github.com/ulquiorracode/ipatlas/actions/workflows/ci.yml/badge.svg)](https://github.com/ulquiorracode/ipatlas/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/ulquiorracode/ipatlas?color=blue&label=version)](https://github.com/ulquiorracode/ipatlas/releases)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
