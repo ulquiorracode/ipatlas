@@ -153,5 +153,47 @@ class TestIpAtlas(unittest.TestCase):
             self.assertTrue(rec.flags.is_proxy)
             self.assertTrue(rec.flags.is_datacenter)
 
+    def test_presets_firewall_and_country(self):
+        """Tests that country and firewall presets coalesce adjacent ranges."""
+        # 1. Country-Only preset: JP range with internal proxy should coalesce into a single JP interval!
+        country_bin = os.path.join(self.tmp_path, "country.bin")
+        stats_c = compile_database(
+            mode="full",
+            preset="country",
+            output_path=country_bin,
+            db_path=self.db5_path,
+            px_path=self.px10_path,
+        )
+        # Without threats/cities, the 3 DB5 rows: US, JP, RU should collapse to exactly 3 intervals!
+        self.assertEqual(stats_c["records"], 3)
+        self.assertEqual(stats_c["profiles"], 3)
+        self.assertEqual(stats_c["cities"], 0) # Zero city strings stored
+        
+        with IpAtlasReader(country_bin) as reader:
+            rec = reader.lookup("1.0.20.55")
+            self.assertIsNotNone(rec)
+            self.assertEqual(rec.country, "JP")
+            self.assertEqual(rec.city, "")
+            self.assertFalse(rec.flags.is_proxy) # Threats disabled in country preset
+
+        # 2. Firewall preset: Country + ASN + Threats
+        fw_bin = os.path.join(self.tmp_path, "firewall.bin")
+        stats_fw = compile_database(
+            mode="full",
+            preset="firewall",
+            output_path=fw_bin,
+            db_path=self.db5_path,
+            px_path=self.px10_path,
+        )
+        self.assertEqual(stats_fw["cities"], 0) # No city strings stored in firewall preset
+        with IpAtlasReader(fw_bin) as reader:
+            rec = reader.lookup("1.0.20.55")
+            self.assertIsNotNone(rec)
+            self.assertEqual(rec.country, "JP")
+            self.assertTrue(rec.flags.is_proxy)
+            self.assertTrue(rec.flags.is_botnet)
+            self.assertEqual(rec.asn, 13335)
+            self.assertEqual(rec.city, "")
+
 if __name__ == "__main__":
     unittest.main()
