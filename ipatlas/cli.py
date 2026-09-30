@@ -19,6 +19,8 @@ def main():
     # compile
     p_comp = subparsers.add_parser("compile", help="Compile CSV dataset(s) into IPAtlas binary and archives")
     p_comp.add_argument("--mode", choices=["full", "proxy", "geo"], default="full", help="Compilation mode (default: full)")
+    p_comp.add_argument("--preset", choices=["full", "city", "firewall", "country", "threats"], help="Feature preset to compile")
+    p_comp.add_argument("--features", help="Comma-separated feature flags: country,region,city,coords,isp,asn,threats")
     p_comp.add_argument("--geo", "--db", "--db5", dest="geo", help="Path to IP2Location CSV (DB1, DB3, DB5, DB11, etc.)")
     p_comp.add_argument("--proxy", "--px", "--px10", dest="proxy", help="Path to IP2Proxy CSV (PX1 - PX12)")
     p_comp.add_argument("--out", "-o", required=True, help="Output binary path (.bin)")
@@ -46,6 +48,8 @@ def main():
                 output_path=args.out,
                 db_path=args.geo,
                 px_path=args.proxy,
+                preset=args.preset,
+                features=args.features,
                 progress_callback=print
             )
         except Exception as e:

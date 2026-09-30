@@ -58,6 +58,20 @@ ipatlas compile --mode full \
   --proxy IP2PROXY-LITE-PX10.CSV \
   -o ipatlas_full.bin
 
+# Fast Preset Compilation (Cascade Coalescing):
+# - firewall: Country + ASN + Threat flags (~7.9 MB binary, ~2.5 MB .zst)
+ipatlas compile --preset firewall --geo IP2LOCATION-LITE-DB5.CSV --proxy IP2PROXY-LITE-PX10.CSV -o ipatlas_firewall.bin
+
+# - country: Pure Geo-Blocking Country-Only (~5.6 MB binary, ~1.2 MB .zst, 233x reduction!)
+ipatlas compile --preset country --geo IP2LOCATION-LITE-DB5.CSV -o ipatlas_country.bin
+
+# - city: Country + Region + City + Coordinates without threats (~38 MB binary)
+ipatlas compile --preset city --geo IP2LOCATION-LITE-DB5.CSV -o ipatlas_city.bin
+
+# Custom Feature Mask:
+ipatlas compile --features country,asn,threats \
+  --geo IP2LOCATION-LITE-DB5.CSV --proxy IP2PROXY-LITE-PX10.CSV -o custom.bin
+
 # Proxy-Only
 ipatlas compile --mode proxy --proxy IP2PROXY-LITE-PX10.CSV -o ipatlas_proxy.bin
 

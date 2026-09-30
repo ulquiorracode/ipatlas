@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Profile ID Normalization (Format V4)**: Decoupled IP ranges from repeated metadata. Replaces 28-byte inline records with compact 12-byte ranges (`from`, `to`, `profile_id`) and a dedicated 20-byte Profile Table.
+- **Presets & Feature Masks**: Added `--preset` (`full`, `city`, `firewall`, `country`, `threats`) and `--features` bitmask compiler options. Unused metadata fields are masked and adjacent intervals coalesce on the fly, reducing database size down to **5.6 MB** binary (~1.2 MB `.zst`, **233x reduction**) for pure country geo-blocking.
 - **Universal Dataset Support**: Dynamic column detection for all IP2Location LITE/Commercial databases (`DB1`, `DB3`, `DB5`, `DB11`) and IP2Proxy (`PX1` - `PX12`).
 - **Zstandard Distribution (`.zst`)**: Automated compression using Zstandard level 19, reducing distribution size by **26.8x** (740 MB CSV down to 27.6 MB).
 - **Flexible CLI Arguments**: Added `--geo` (or `--db`) and `--proxy` (or `--px`) flags to compiler CLI.

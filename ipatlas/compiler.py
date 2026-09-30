@@ -2,7 +2,7 @@
 IPAtlas Database Compiler.
 
 Ultra-fast zero-copy binary GeoIP and Proxy/VPN threat database compiler.
-Supports any IP2Location DB (DB1-DB26) and IP2Proxy PX (PX1-PX11) CSV dataset.
+Supports arbitrary feature masks, presets, and any IP2Location DB / IP2Proxy PX datasets.
 """
 
 import csv
@@ -11,9 +11,48 @@ import time
 import os
 import zlib
 import subprocess
-from typing import Optional, Callable, Tuple, Iterator
+from typing import Optional, Callable, Dict
 
 MAGIC = b'ATLS'
+
+# Feature bitmasks
+FEATURE_COUNTRY = 0x0001
+FEATURE_REGION  = 0x0002
+FEATURE_CITY    = 0x0004
+FEATURE_COORDS  = 0x0008
+FEATURE_ISP     = 0x0010
+FEATURE_ASN     = 0x0020
+FEATURE_THREATS = 0x0040
+
+ALL_FEATURES = (
+    FEATURE_COUNTRY |
+    FEATURE_REGION  |
+    FEATURE_CITY    |
+    FEATURE_COORDS  |
+    FEATURE_ISP     |
+    FEATURE_ASN     |
+    FEATURE_THREATS
+)
+
+PRESETS: Dict[str, int] = {
+    "full": ALL_FEATURES,
+    "city": FEATURE_COUNTRY | FEATURE_REGION | FEATURE_CITY | FEATURE_COORDS,
+    "firewall": FEATURE_COUNTRY | FEATURE_ASN | FEATURE_THREATS,
+    "country": FEATURE_COUNTRY,
+    "threats": FEATURE_ASN | FEATURE_THREATS,
+}
+
+FEATURE_NAMES = {
+    "country": FEATURE_COUNTRY,
+    "region": FEATURE_REGION,
+    "city": FEATURE_CITY,
+    "coords": FEATURE_COORDS,
+    "latlon": FEATURE_COORDS,
+    "isp": FEATURE_ISP,
+    "asn": FEATURE_ASN,
+    "threats": FEATURE_THREATS,
+    "proxy": FEATURE_THREATS,
+}
 
 USAGE_FLAGS = {
     'DCH': 0x0001, # Datacenter / Web Hosting (VPN / Proxy / Bot origin)
@@ -36,6 +75,30 @@ THREAT_FLAGS = {
 
 PROXY_FLAG = 0x0800 # Proxy / Anonymizer
 
+def parse_features(features_str: Optional[str] = None, preset: Optional[str] = None) -> int:
+    """Resolves features bitmask from preset name or comma-separated list of feature names."""
+    if preset:
+        preset_lower = preset.strip().lower()
+        if preset_lower in PRESETS:
+            return PRESETS[preset_lower]
+        raise ValueError(f"Unknown preset: '{preset}'. Available presets: {list(PRESETS.keys())}")
+    
+    if not features_str:
+        return ALL_FEATURES
+
+    mask = 0
+    for item in features_str.split(','):
+        name = item.strip().lower()
+        if not name:
+            continue
+        if name in FEATURE_NAMES:
+            mask |= FEATURE_NAMES[name]
+        elif name in PRESETS:
+            mask |= PRESETS[name]
+        else:
+            raise ValueError(f"Unknown feature or preset: '{name}'. Available: {list(FEATURE_NAMES.keys())}")
+    return mask
+
 def parse_px_flags(usage_str: str, threat_str: str) -> int:
     flags = PROXY_FLAG
     if usage_str:
@@ -55,7 +118,6 @@ def _safe_float_latlon(val: str) -> int:
 
 def _safe_asn(val: str) -> int:
     try:
-        # Strip potential 'AS' prefix
         if val.upper().startswith("AS"):
             val = val[2:]
         return int(val) & 0xFFFFFFFF
@@ -67,6 +129,8 @@ def compile_database(
     output_path: str,
     db_path: Optional[str] = None,
     px_path: Optional[str] = None,
+    preset: Optional[str] = None,
+    features: Optional[str] = None,
     # Backwards compatibility kwargs
     db5_path: Optional[str] = None,
     px10_path: Optional[str] = None,
@@ -77,25 +141,61 @@ def compile_database(
     geo_csv = db_path or db5_path
     proxy_csv = px_path or px10_path
 
-    if mode == "full":
-        if not geo_csv or not proxy_csv:
-            raise ValueError("mode='full' requires both db_path (or db5_path) and px_path (or px10_path)")
-        return _compile_full(geo_csv, proxy_csv, output_path, log)
+    # Determine feature mask
+    if preset or features:
+        feature_mask = parse_features(features_str=features, preset=preset)
+    elif mode == "proxy":
+        feature_mask = FEATURE_COUNTRY | FEATURE_CITY | FEATURE_ISP | FEATURE_ASN | FEATURE_THREATS
+    elif mode == "geo":
+        feature_mask = FEATURE_COUNTRY | FEATURE_REGION | FEATURE_CITY | FEATURE_COORDS
+    else:
+        feature_mask = ALL_FEATURES
+
+    if mode == "full" or preset:
+        # Full mode or preset-driven: requires geo_csv if geo features needed, px_csv if threat features needed
+        need_geo = bool(feature_mask & (FEATURE_COUNTRY | FEATURE_REGION | FEATURE_CITY | FEATURE_COORDS))
+        need_px = bool(feature_mask & (FEATURE_ISP | FEATURE_ASN | FEATURE_THREATS))
+        
+        if need_geo and not geo_csv:
+            raise ValueError(f"Feature mask requires GeoIP dataset (--geo), but none provided.")
+        if need_px and not proxy_csv:
+            if not geo_csv:
+                raise ValueError("Requires at least --geo or --proxy dataset.")
+            # If only geo_csv provided but need_px was requested, we gracefully proceed with threats disabled
+            need_px = False
+            feature_mask &= ~(FEATURE_ISP | FEATURE_ASN | FEATURE_THREATS)
+
+        if geo_csv and proxy_csv:
+            return _compile_full(geo_csv, proxy_csv, output_path, feature_mask, log)
+        elif need_px and proxy_csv:
+            return _compile_proxy_only(proxy_csv, output_path, feature_mask, log)
+        elif geo_csv:
+            return _compile_geo_only(geo_csv, output_path, feature_mask, log)
+        else:
+            raise ValueError("No valid dataset combination found for compilation.")
     elif mode == "proxy":
         if not proxy_csv:
             raise ValueError("mode='proxy' requires px_path (or px10_path)")
-        return _compile_proxy_only(proxy_csv, output_path, log)
+        return _compile_proxy_only(proxy_csv, output_path, feature_mask, log)
     elif mode == "geo":
         if not geo_csv:
             raise ValueError("mode='geo' requires db_path (or db5_path)")
-        return _compile_geo_only(geo_csv, output_path, log)
+        return _compile_geo_only(geo_csv, output_path, feature_mask, log)
     else:
         raise ValueError(f"Unknown mode: {mode}. Choose 'full', 'proxy', or 'geo'.")
 
-def _compile_full(geo_path: str, px_path: str, bin_out_path: str, log: Callable) -> dict:
+def _compile_full(geo_path: str, px_path: str, bin_out_path: str, feature_mask: int, log: Callable) -> dict:
     start = time.time()
-    log("Compiling Unified Full Database...")
+    log(f"Compiling Unified Database with feature mask: {hex(feature_mask)}...")
     
+    has_country = bool(feature_mask & FEATURE_COUNTRY)
+    has_region = bool(feature_mask & FEATURE_REGION)
+    has_city = bool(feature_mask & FEATURE_CITY)
+    has_coords = bool(feature_mask & FEATURE_COORDS)
+    has_isp = bool(feature_mask & FEATURE_ISP)
+    has_asn = bool(feature_mask & FEATURE_ASN)
+    has_threats = bool(feature_mask & FEATURE_THREATS)
+
     cities_map = {"": 0, "-": 0}
     cities_list = [""]
     regions_map = {"": 0, "-": 0}
@@ -104,18 +204,21 @@ def _compile_full(geo_path: str, px_path: str, bin_out_path: str, log: Callable)
     isps_list = [""]
     
     def get_city_idx(name: str) -> int:
+        if not has_city or not name: return 0
         if name not in cities_map:
             cities_map[name] = len(cities_list)
             cities_list.append(name)
         return cities_map[name]
         
     def get_region_idx(name: str) -> int:
+        if not has_region or not name: return 0
         if name not in regions_map:
             regions_map[name] = len(regions_list)
             regions_list.append(name)
         return regions_map[name]
         
     def get_isp_idx(name: str) -> int:
+        if not has_isp or not name: return 0
         if name not in isps_map:
             isps_map[name] = len(isps_list)
             isps_list.append(name)
@@ -128,17 +231,13 @@ def _compile_full(geo_path: str, px_path: str, bin_out_path: str, log: Callable)
                     continue
                 ip_from = int(row[0])
                 ip_to = int(row[1])
-                cc = row[2][:2].encode('ascii', errors='ignore') if len(row) > 2 else b"--"
+                cc = row[2][:2].encode('ascii', errors='ignore') if (has_country and len(row) > 2) else b"--"
                 if len(cc) < 2: cc = b"--"
                 
-                # Dynamic column mapping:
-                # DB1:  ip_from(0), ip_to(1), cc(2), country_name(3)
-                # DB3+: ... region(4), city(5)
-                # DB5+: ... lat(6), lon(7)
-                reg_idx = get_region_idx(row[4]) if len(row) > 4 else 0
-                city_idx = get_city_idx(row[5]) if len(row) > 5 else 0
-                lat = _safe_float_latlon(row[6]) if len(row) > 6 else 0
-                lon = _safe_float_latlon(row[7]) if len(row) > 7 else 0
+                reg_idx = get_region_idx(row[4]) if (has_region and len(row) > 4) else 0
+                city_idx = get_city_idx(row[5]) if (has_city and len(row) > 5) else 0
+                lat = _safe_float_latlon(row[6]) if (has_coords and len(row) > 6) else 0
+                lon = _safe_float_latlon(row[7]) if (has_coords and len(row) > 7) else 0
                 
                 yield (ip_from, ip_to, city_idx, cc, reg_idx, lat, lon)
 
@@ -149,14 +248,12 @@ def _compile_full(geo_path: str, px_path: str, bin_out_path: str, log: Callable)
                     continue
                 ip_from = int(row[0])
                 ip_to = int(row[1])
-                # PX1: ip_from(0), ip_to(1), proxy_type(2), cc(3), country_name(4)
-                # PX2+: ... region(5), city(6), isp(7), domain(8), usage(9), asn(10), as_name(11), last_seen(12), threat(13)
-                isp_str = row[7] if len(row) > 7 else ""
+                isp_str = row[7] if (has_isp and len(row) > 7) else ""
                 isp_idx = get_isp_idx(isp_str)
-                asn = _safe_asn(row[10]) if len(row) > 10 else 0
+                asn = _safe_asn(row[10]) if (has_asn and len(row) > 10) else 0
                 usage = row[9] if len(row) > 9 else ""
                 threat = row[13] if len(row) > 13 else ""
-                flags = parse_px_flags(usage, threat)
+                flags = parse_px_flags(usage, threat) if has_threats else 0
                 yield (ip_from, ip_to, isp_idx, asn, flags)
 
     geo_iter = stream_geo()
@@ -194,7 +291,7 @@ def _compile_full(geo_path: str, px_path: str, bin_out_path: str, log: Callable)
                 cur_geo = (overlap_end + 1, g_to, city_idx, cc, reg_idx, lat, lon)
                 cur_px = next(px_iter, None)
 
-    # Coalescing adjacent identical intervals
+    # Coalescing adjacent identical intervals (Feature-Mask sensitive!)
     coalesced = []
     prev = None
     for r in merged_records:
@@ -224,28 +321,31 @@ def _compile_full(geo_path: str, px_path: str, bin_out_path: str, log: Callable)
     # Serialize string blobs
     cities_blob = bytearray()
     city_offsets = []
-    for c in cities_list:
-        city_offsets.append(len(cities_blob))
-        cities_blob.extend(c.encode('utf-8'))
-        cities_blob.append(0)
+    if has_city:
+        for c in cities_list:
+            city_offsets.append(len(cities_blob))
+            cities_blob.extend(c.encode('utf-8'))
+            cities_blob.append(0)
         
     regions_blob = bytearray()
     region_offsets = []
-    for r in regions_list:
-        region_offsets.append(len(regions_blob))
-        regions_blob.extend(r.encode('utf-8'))
-        regions_blob.append(0)
+    if has_region:
+        for r in regions_list:
+            region_offsets.append(len(regions_blob))
+            regions_blob.extend(r.encode('utf-8'))
+            regions_blob.append(0)
         
     isps_blob = bytearray()
     isp_offsets = []
-    for isp in isps_list:
-        isp_offsets.append(len(isps_blob))
-        isps_blob.extend(isp.encode('utf-8'))
-        isps_blob.append(0)
+    if has_isp:
+        for isp in isps_list:
+            isp_offsets.append(len(isps_blob))
+            isps_blob.extend(isp.encode('utf-8'))
+            isps_blob.append(0)
         
-    header_size = 68 # 68 bytes header (with prof_count, prof_offset)
-    records_size = len(ranges_v4) * 12 # 12 bytes per IP range
-    prof_size = len(prof_list) * 20 # 20 bytes per unique profile
+    header_size = 68
+    records_size = len(ranges_v4) * 12
+    prof_size = len(prof_list) * 20
     
     prof_offset = header_size + records_size
     c_idx_off = prof_offset + prof_size
@@ -268,16 +368,16 @@ def _compile_full(geo_path: str, px_path: str, bin_out_path: str, log: Callable)
         f.write(struct.pack(
             '<4sHIHIIIIIIIIIIIIII',
             MAGIC,
-            4, # version 4 = Full Unified with Profile ID Normalization
+            4, # version 4
             len(ranges_v4),
             12, # record size = 12 bytes
             len(prof_list),
             prof_offset,
-            len(cities_list),
+            len(city_offsets),
             c_idx_off, c_data_off, c_data_len,
-            len(regions_list),
+            len(region_offsets),
             r_idx_off, r_data_off, r_data_len,
-            len(isps_list),
+            len(isp_offsets),
             i_idx_off, i_data_off, i_data_len
         ))
         for r in ranges_v4:
@@ -301,7 +401,6 @@ def _compile_full(geo_path: str, px_path: str, bin_out_path: str, log: Callable)
         f_out.write(compressed)
     gz_size = os.path.getsize(gz_path)
     
-    # Try compressing with zstd if available
     zst_size = None
     zst_path = bin_out_path + ".zst"
     try:
@@ -316,11 +415,12 @@ def _compile_full(geo_path: str, px_path: str, bin_out_path: str, log: Callable)
     elapsed = time.time() - start
     stats = {
         "mode": "full",
+        "features": feature_mask,
         "records": len(ranges_v4),
         "profiles": len(prof_list),
-        "cities": len(cities_list),
-        "regions": len(regions_list),
-        "isps": len(isps_list),
+        "cities": len(city_offsets),
+        "regions": len(region_offsets),
+        "isps": len(isp_offsets),
         "raw_size": raw_size,
         "gz_size": gz_size,
         "zst_size": zst_size,
@@ -333,10 +433,16 @@ def _compile_full(geo_path: str, px_path: str, bin_out_path: str, log: Callable)
     log(f"Compiled {len(ranges_v4):,} intervals ({len(prof_list):,} profiles) in {elapsed:.2f}s | Binary: {raw_size/(1024*1024):.1f} MB | GZ: {gz_size/(1024*1024):.1f} MB ({stats['compression_ratio']}x){zst_msg}")
     return stats
 
-def _compile_proxy_only(px_path: str, bin_out_path: str, log: Callable) -> dict:
+def _compile_proxy_only(px_path: str, bin_out_path: str, feature_mask: int, log: Callable) -> dict:
     start = time.time()
     log("Compiling Proxy-Only Database...")
     
+    has_country = bool(feature_mask & FEATURE_COUNTRY)
+    has_city = bool(feature_mask & FEATURE_CITY)
+    has_isp = bool(feature_mask & FEATURE_ISP)
+    has_asn = bool(feature_mask & FEATURE_ASN)
+    has_threats = bool(feature_mask & FEATURE_THREATS)
+
     cities_map = {"": 0, "-": 0}
     cities_list = [""]
     isps_map = {"": 0, "-": 0}
@@ -353,25 +459,29 @@ def _compile_proxy_only(px_path: str, bin_out_path: str, log: Callable) -> dict:
                 continue
             ip_from = int(row[0])
             ip_to = int(row[1])
-            cc = row[3][:2].encode('ascii', errors='ignore') if len(row) > 3 else b"--"
+            cc = row[3][:2].encode('ascii', errors='ignore') if (has_country and len(row) > 3) else b"--"
             if len(cc) < 2: cc = b"--"
-            city_str = row[6] if len(row) > 6 else ""
-            isp_str = row[7] if len(row) > 7 else ""
+            city_str = row[6] if (has_city and len(row) > 6) else ""
+            isp_str = row[7] if (has_isp and len(row) > 7) else ""
             
-            if city_str not in cities_map:
-                cities_map[city_str] = len(cities_list)
-                cities_list.append(city_str)
-            city_idx = cities_map[city_str]
+            city_idx = 0
+            if has_city and city_str:
+                if city_str not in cities_map:
+                    cities_map[city_str] = len(cities_list)
+                    cities_list.append(city_str)
+                city_idx = cities_map[city_str]
             
-            if isp_str not in isps_map:
-                isps_map[isp_str] = len(isps_list)
-                isps_list.append(isp_str)
-            isp_idx = isps_map[isp_str]
+            isp_idx = 0
+            if has_isp and isp_str:
+                if isp_str not in isps_map:
+                    isps_map[isp_str] = len(isps_list)
+                    isps_list.append(isp_str)
+                isp_idx = isps_map[isp_str]
             
-            asn = _safe_asn(row[10]) if len(row) > 10 else 0
+            asn = _safe_asn(row[10]) if (has_asn and len(row) > 10) else 0
             usage = row[9] if len(row) > 9 else ""
             threat = row[13] if len(row) > 13 else ""
-            flags = parse_px_flags(usage, threat)
+            flags = parse_px_flags(usage, threat) if has_threats else 0
             
             meta = (asn, city_idx, isp_idx, cc, flags)
             if prev_meta is not None and prev_to + 1 == ip_from and meta == prev_meta:
@@ -388,17 +498,19 @@ def _compile_proxy_only(px_path: str, bin_out_path: str, log: Callable) -> dict:
 
     cities_blob = bytearray()
     city_offsets = []
-    for c in cities_list:
-        city_offsets.append(len(cities_blob))
-        cities_blob.extend(c.encode('utf-8'))
-        cities_blob.append(0)
+    if has_city:
+        for c in cities_list:
+            city_offsets.append(len(cities_blob))
+            cities_blob.extend(c.encode('utf-8'))
+            cities_blob.append(0)
         
     isps_blob = bytearray()
     isp_offsets = []
-    for isp in isps_list:
-        isp_offsets.append(len(isps_blob))
-        isps_blob.extend(isp.encode('utf-8'))
-        isps_blob.append(0)
+    if has_isp:
+        for isp in isps_list:
+            isp_offsets.append(len(isps_blob))
+            isps_blob.extend(isp.encode('utf-8'))
+            isps_blob.append(0)
         
     header_size = 44
     records_size = len(records) * 20
@@ -421,9 +533,9 @@ def _compile_proxy_only(px_path: str, bin_out_path: str, log: Callable) -> dict:
             1, # version 1 = Proxy Only
             len(records),
             20,
-            len(cities_list),
+            len(city_offsets),
             c_idx_off, c_data_off, c_data_len,
-            len(isps_list),
+            len(isp_offsets),
             i_idx_off, i_data_off, i_data_len
         ))
         for r in records:
@@ -454,9 +566,10 @@ def _compile_proxy_only(px_path: str, bin_out_path: str, log: Callable) -> dict:
     elapsed = time.time() - start
     stats = {
         "mode": "proxy",
+        "features": feature_mask,
         "records": len(records),
-        "cities": len(cities_list),
-        "isps": len(isps_list),
+        "cities": len(city_offsets),
+        "isps": len(isp_offsets),
         "raw_size": raw_size,
         "gz_size": gz_size,
         "zst_size": zst_size,
@@ -469,10 +582,15 @@ def _compile_proxy_only(px_path: str, bin_out_path: str, log: Callable) -> dict:
     log(f"Compiled {len(records):,} proxy records in {elapsed:.2f}s | Binary: {raw_size/(1024*1024):.1f} MB | GZ: {gz_size/(1024*1024):.1f} MB ({stats['compression_ratio']}x){zst_msg}")
     return stats
 
-def _compile_geo_only(geo_path: str, bin_out_path: str, log: Callable) -> dict:
+def _compile_geo_only(geo_path: str, bin_out_path: str, feature_mask: int, log: Callable) -> dict:
     start = time.time()
     log("Compiling Geo-Only Database...")
     
+    has_country = bool(feature_mask & FEATURE_COUNTRY)
+    has_region = bool(feature_mask & FEATURE_REGION)
+    has_city = bool(feature_mask & FEATURE_CITY)
+    has_coords = bool(feature_mask & FEATURE_COORDS)
+
     cities_map = {"": 0, "-": 0}
     cities_list = [""]
     regions_map = {"": 0, "-": 0}
@@ -489,22 +607,26 @@ def _compile_geo_only(geo_path: str, bin_out_path: str, log: Callable) -> dict:
                 continue
             ip_from = int(row[0])
             ip_to = int(row[1])
-            cc = row[2][:2].encode('ascii', errors='ignore') if len(row) > 2 else b"--"
+            cc = row[2][:2].encode('ascii', errors='ignore') if (has_country and len(row) > 2) else b"--"
             if len(cc) < 2: cc = b"--"
-            reg_str = row[4] if len(row) > 4 else ""
-            city_str = row[5] if len(row) > 5 else ""
-            lat = _safe_float_latlon(row[6]) if len(row) > 6 else 0
-            lon = _safe_float_latlon(row[7]) if len(row) > 7 else 0
+            reg_str = row[4] if (has_region and len(row) > 4) else ""
+            city_str = row[5] if (has_city and len(row) > 5) else ""
+            lat = _safe_float_latlon(row[6]) if (has_coords and len(row) > 6) else 0
+            lon = _safe_float_latlon(row[7]) if (has_coords and len(row) > 7) else 0
             
-            if city_str not in cities_map:
-                cities_map[city_str] = len(cities_list)
-                cities_list.append(city_str)
-            city_idx = cities_map[city_str]
+            city_idx = 0
+            if has_city and city_str:
+                if city_str not in cities_map:
+                    cities_map[city_str] = len(cities_list)
+                    cities_list.append(city_str)
+                city_idx = cities_map[city_str]
             
-            if reg_str not in regions_map:
-                regions_map[reg_str] = len(regions_list)
-                regions_list.append(reg_str)
-            reg_idx = regions_map[reg_str]
+            reg_idx = 0
+            if has_region and reg_str:
+                if reg_str not in regions_map:
+                    regions_map[reg_str] = len(regions_list)
+                    regions_list.append(reg_str)
+                reg_idx = regions_map[reg_str]
             
             meta = (city_idx, cc, reg_idx, lat, lon)
             if prev_meta is not None and prev_to + 1 == ip_from and meta == prev_meta:
@@ -521,17 +643,19 @@ def _compile_geo_only(geo_path: str, bin_out_path: str, log: Callable) -> dict:
 
     cities_blob = bytearray()
     city_offsets = []
-    for c in cities_list:
-        city_offsets.append(len(cities_blob))
-        cities_blob.extend(c.encode('utf-8'))
-        cities_blob.append(0)
+    if has_city:
+        for c in cities_list:
+            city_offsets.append(len(cities_blob))
+            cities_blob.extend(c.encode('utf-8'))
+            cities_blob.append(0)
         
     regions_blob = bytearray()
     region_offsets = []
-    for r in regions_list:
-        region_offsets.append(len(regions_blob))
-        regions_blob.extend(r.encode('utf-8'))
-        regions_blob.append(0)
+    if has_region:
+        for r in regions_list:
+            region_offsets.append(len(regions_blob))
+            regions_blob.extend(r.encode('utf-8'))
+            regions_blob.append(0)
         
     header_size = 44
     records_size = len(records) * 20
@@ -554,9 +678,9 @@ def _compile_geo_only(geo_path: str, bin_out_path: str, log: Callable) -> dict:
             2, # version 2 = Geo Only
             len(records),
             20,
-            len(cities_list),
+            len(city_offsets),
             c_idx_off, c_data_off, c_data_len,
-            len(regions_list),
+            len(region_offsets),
             r_idx_off, r_data_off, r_data_len
         ))
         for r in records:
@@ -587,9 +711,10 @@ def _compile_geo_only(geo_path: str, bin_out_path: str, log: Callable) -> dict:
     elapsed = time.time() - start
     stats = {
         "mode": "geo",
+        "features": feature_mask,
         "records": len(records),
-        "cities": len(cities_list),
-        "regions": len(regions_list),
+        "cities": len(city_offsets),
+        "regions": len(region_offsets),
         "raw_size": raw_size,
         "gz_size": gz_size,
         "zst_size": zst_size,
