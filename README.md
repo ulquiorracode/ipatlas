@@ -103,8 +103,6 @@ ipatlas info ipatlas_full.bin
 ipatlas benchmark ipatlas_full.bin -n 100000
 ```
 
----
-
 ## Python API
 
 ```python
@@ -118,8 +116,6 @@ with IpAtlasReader("ipatlas_full.bin") as reader:
         print(f"Is Proxy/VPN:   {record.flags.is_proxy}")
         print(f"Is Botnet:      {record.flags.is_botnet}")
 ```
-
----
 
 ## Binary Format Specification
 
@@ -166,8 +162,6 @@ All multi-byte integers are stored in **Little-Endian** format (`<`).
   - `0x0200` — Port / Vulnerability Scanner (`SCANNER`)
   - `0x0400` — DDoS / Botnet Node (`BOTNET`)
   - `0x0800` — Proxy / VPN Anonymizer (`PROXY`)
-
----
 
 ## Data Attribution & License
 
