@@ -3,8 +3,8 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "grlg-geo"
-version = "0.1.0"
+name = "ipatlas"
+version = "0.2.0"
 description = "Ultra-fast zero-copy binary GeoIP and Proxy/VPN threat database compiler and reader"
 readme = "README.md"
 license = { text = "MIT" }
@@ -27,7 +27,7 @@ dependencies = []
 dev = ["pytest"]
 
 [project.scripts]
-grlg = "grlg.cli:main"
+ipatlas = "ipatlas.cli:main"
 
 [tool.setuptools]
-packages = ["grlg"]
+packages = ["ipatlas"]

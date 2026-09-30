@@ -66,8 +66,8 @@ class GeoRecord:
         t_ip = socket.inet_ntoa(struct.pack('!I', self.ip_to))
         return f"{f_ip} - {t_ip}"
 
-class GrlgReader:
-    """Zero-copy memory-mapped GRLG database reader."""
+class IpAtlasReader:
+    """Zero-copy memory-mapped IPAtlas database reader."""
 
     def __init__(self, filepath: str):
         self.filepath = filepath
@@ -76,19 +76,21 @@ class GrlgReader:
         
         # Read magic and version
         magic, ver = struct.unpack('<4sH', self._mm[:6])
-        if magic != b'GRLG':
-            raise ValueError(f"Invalid GRLG magic: {magic}")
+        if magic not in (b'ATLS', b'GRLG'):
+            raise ValueError(f"Invalid IPAtlas magic: {magic}")
         self.version = ver
         
-        if self.version == 3: # Full Unified (60 bytes header)
-            hdr = struct.unpack('<4sHIHIIIIIIIIIIII', self._mm[:60])
+        if self.version == 4: # Full Unified with Profile ID Normalization (68 bytes header)
+            hdr = struct.unpack('<4sHIHIIIIIIIIIIIIII', self._mm[:68])
             self.total_records = hdr[2]
             self.record_size = hdr[3]
-            self.header_size = 60
+            self.total_profiles = hdr[4]
+            self.prof_offset = hdr[5]
+            self.header_size = 68
             
-            c_cnt, c_i_off, c_d_off, c_d_len = hdr[4], hdr[5], hdr[6], hdr[7]
-            r_cnt, r_i_off, r_d_off, r_d_len = hdr[8], hdr[9], hdr[10], hdr[11]
-            i_cnt, i_i_off, i_d_off, i_d_len = hdr[12], hdr[13], hdr[14], hdr[15]
+            c_cnt, c_i_off, c_d_off, c_d_len = hdr[6], hdr[7], hdr[8], hdr[9]
+            r_cnt, r_i_off, r_d_off, r_d_len = hdr[10], hdr[11], hdr[12], hdr[13]
+            i_cnt, i_i_off, i_d_off, i_d_len = hdr[14], hdr[15], hdr[16], hdr[17]
             
             self._city_offsets = [struct.unpack('<I', self._mm[c_i_off + i*4:c_i_off + (i+1)*4])[0] for i in range(c_cnt)]
             self._city_blob = self._mm[c_d_off:c_d_off + c_d_len]
@@ -103,6 +105,8 @@ class GrlgReader:
             hdr = struct.unpack('<4sHIHIIIIIIII', self._mm[:44])
             self.total_records = hdr[2]
             self.record_size = hdr[3]
+            self.total_profiles = 0
+            self.prof_offset = 0
             self.header_size = 44
             
             c_cnt, c_i_off, c_d_off, c_d_len = hdr[4], hdr[5], hdr[6], hdr[7]
@@ -120,6 +124,8 @@ class GrlgReader:
             hdr = struct.unpack('<4sHIHIIIIIIII', self._mm[:44])
             self.total_records = hdr[2]
             self.record_size = hdr[3]
+            self.total_profiles = 0
+            self.prof_offset = 0
             self.header_size = 44
             
             c_cnt, c_i_off, c_d_off, c_d_len = hdr[4], hdr[5], hdr[6], hdr[7]
@@ -171,26 +177,32 @@ class GrlgReader:
             mid = (low + high) // 2
             offset = self.header_size + mid * self.record_size
             
-            if self.version == 3: # Full Unified (28 bytes)
-                ip_from, ip_to, city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon = struct.unpack(
-                    '<IIII2sHHHhh', self._mm[offset:offset+28]
-                )
-            elif self.version == 1: # Proxy Only (20 bytes)
-                ip_from, ip_to, asn, city_idx, isp_idx, cc, flags = struct.unpack(
-                    '<IIIHH2sH', self._mm[offset:offset+20]
-                )
-                reg_idx, lat, lon = 0, 0, 0
-            else: # Geo Only (20 bytes)
-                ip_from, ip_to, city_idx, cc, reg_idx, lat, lon = struct.unpack(
-                    '<III2sHhh', self._mm[offset:offset+20]
-                )
-                asn, isp_idx, flags = 0, 0, 0
+            if self.version == 4: # Full Unified V4 (12 bytes per range)
+                ip_from, ip_to, prof_id = struct.unpack('<III', self._mm[offset:offset+12])
+            else: # Proxy / Geo Only (20 bytes)
+                ip_from, ip_to = struct.unpack('<II', self._mm[offset:offset+8])
 
             if target < ip_from:
                 high = mid - 1
             elif target > ip_to:
                 low = mid + 1
             else:
+                if self.version == 4:
+                    p_off = self.prof_offset + prof_id * 20
+                    city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon = struct.unpack(
+                        '<II2sHHHhh', self._mm[p_off:p_off+20]
+                    )
+                elif self.version == 1: # Proxy Only
+                    ip_from, ip_to, asn, city_idx, isp_idx, cc, flags = struct.unpack(
+                        '<IIIHH2sH', self._mm[offset:offset+20]
+                    )
+                    reg_idx, lat, lon = 0, 0, 0
+                else: # Geo Only
+                    ip_from, ip_to, city_idx, cc, reg_idx, lat, lon = struct.unpack(
+                        '<III2sHhh', self._mm[offset:offset+20]
+                    )
+                    asn, isp_idx, flags = 0, 0, 0
+
                 return GeoRecord(
                     ip=ip_str,
                     ip_from=ip_from,
@@ -206,3 +218,6 @@ class GrlgReader:
                 )
 
         return None
+
+# Backwards compatibility alias
+GrlgReader = IpAtlasReader

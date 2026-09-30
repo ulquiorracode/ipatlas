@@ -1,6 +1,7 @@
-# grlg-geo
+# IPAtlas
 
 [![CI](https://github.com/ulquiorracode/grlg-geo/actions/workflows/ci.yml/badge.svg)](https://github.com/ulquiorracode/grlg-geo/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/ulquiorracode/grlg-geo?color=blue&label=version)](https://github.com/ulquiorracode/grlg-geo/releases)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -8,30 +9,29 @@ Ultra-fast zero-copy binary GeoIP and Proxy/VPN threat database compiler, reader
 
 Designed for high-throughput network engines, game servers (GoldSrc, Source, Rust), packet filters, and microservices requiring sub-microsecond IP classification without external dependencies or heavy in-memory daemons.
 
----
-
 ## Features
 
 - **Zero-Copy Memory-Mapped Access (`mmap`)**: Query directly from disk cache without allocating hundreds of megabytes on the heap.
 - **Sub-Microsecond Lookups**: Strict $O(\log N)$ binary search over contiguous fixed-size records ($\le 23$ comparisons).
-- **1D Streaming Interval Sweep**: Seamlessly merges disjoint Geolocation (IP2Location DB5) and Proxy Threat Intelligence (IP2Proxy PX10) into unified atomic IP ranges.
-- **Extreme Compression**: Deduplicated string pools and bitflag packing compress 775 MB of raw CSV datasets down to **43.8 MB** `.gz` (**17.7x reduction**).
+- **1D Streaming Interval Sweep**: Seamlessly merges disjoint Geolocation (IP2Location DB1-DB26) and Proxy Threat Intelligence (IP2Proxy PX1-PX12) into unified atomic IP ranges.
+- **Universal Dataset Support**: Dynamic column detection for all IP2Location LITE/Commercial formats (DB1, DB3, DB5, DB11) and IP2Proxy (PX1 - PX12).
+- **Profile ID Normalization**: 7.95 million ranges map onto ~160k unique profiles, shrinking binary size by **55.2%**.
+- **Extreme Compression**: Zstandard (`.zst`) achieves **26.8x compression** (740 MB CSV down to **27.6 MB**).
 - **Bitflag Threat Classification**: Single-cycle bitwise checks for Datacenter/Hosting, Residential ISP, Proxy, VPN, Tor/Botnet, Spam, and Crawlers.
 - **Zero External Dependencies**: Pure Python implementation using only the standard library.
-
----
 
 ## Benchmarks & Datasets
 
 Tested on raw IP2Location LITE DB5 and IP2Proxy LITE PX10 datasets:
 
-| Database Mode | Source CSV | Binary (`.bin`) | Compressed (`.bin.gz`) | Ratio | Records | Lookup Latency |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Unified Full (DB5 + PX10)** | 775 MB | 214.1 MB | **43.8 MB** | **17.7x** | 7,946,419 | **< 1.0 µs** |
-| **Geo-Only (DB5)** | 293 MB | 57.7 MB | **18.8 MB** | **15.6x** | 2,999,603 | **< 0.8 µs** |
-| **Proxy-Only (PX10)** | 482 MB | 48.7 MB | **11.6 MB** | **41.5x** | 2,429,915 | **< 0.8 µs** |
+| Database Mode | Source CSV | Binary (`.bin`) | Gzip (`.gz`) | Zstandard (`.zst`) | Ratio (vs .zst) | Records | Profiles |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Unified Full V4 (DB + PX)** | 740 MB | **95.9 MB** *(was 214 MB)* | **35.4 MB** | **27.6 MB** | **26.8x** | 7,946,419 | 159,501 |
+| **Geo-Only (DB5)** | 280 MB | 57.7 MB | 18.8 MB | 13.9 MB | 20.1x | 2,999,603 | — |
+| **Proxy-Only (PX10)** | 460 MB | 48.7 MB | 11.6 MB | 9.4 MB | 48.9x | 2,429,915 | — |
 
----
+> [!NOTE]
+> **Version 4 Profile Normalization**: In Unified Full mode, 7.95 million ranges map onto only 159,501 unique metadata profiles `(Country, City, Region, ASN, ISP, Flags, Lat, Lon)`. Each range is reduced from **28 bytes to 12 bytes**, shrinking the uncompressed zero-copy mmap binary by **55.2%** (from 214 MB to 95.9 MB).
 
 ## Installation
 
@@ -42,38 +42,37 @@ pip install .
 Or run directly without installation:
 
 ```sh
-python -m grlg.cli --help
+python -m ipatlas.cli --help
 ```
-
----
 
 ## CLI Usage
 
 ### 1. Compile Datasets
 
-Compile raw CSVs into a binary database and compressed `.bin.gz` distribution:
+Compile raw CSVs into a binary database and compressed `.bin.zst` distribution:
 
 ```sh
-# Unified Full (Geo + Proxy/Threats)
-grlg compile --mode full \
-  --db5 IP2LOCATION-LITE-DB5.CSV \
-  --px10 IP2PROXY-LITE-PX10.CSV \
-  -o goldsrc_geo_full.bin
+# Unified Full (Geo + Proxy/Threats, e.g. DB5 + PX10 or DB11 + PX12)
+ipatlas compile --mode full \
+  --geo IP2LOCATION-LITE-DB5.CSV \
+  --proxy IP2PROXY-LITE-PX10.CSV \
+  -o ipatlas_full.bin
 
 # Proxy-Only
-grlg compile --mode proxy --px10 IP2PROXY-LITE-PX10.CSV -o goldsrc_proxy.bin
+ipatlas compile --mode proxy --proxy IP2PROXY-LITE-PX10.CSV -o ipatlas_proxy.bin
 
 # Geo-Only
-grlg compile --mode geo --db5 IP2LOCATION-LITE-DB5.CSV -o goldsrc_geo.bin
+ipatlas compile --mode geo --geo IP2LOCATION-LITE-DB5.CSV -o ipatlas_geo.bin
 ```
 
 ### 2. Lookup an IP Address
 
 ```sh
-grlg lookup goldsrc_geo_full.bin 8.8.8.8
+ipatlas lookup ipatlas_full.bin 8.8.8.8
 ```
 
 Output:
+
 ```text
 IP:          8.8.8.8
 Range:       8.8.8.0 - 8.8.8.255
@@ -96,23 +95,21 @@ Lookup Time: 0.65 µs
 ### 3. Inspect Database Metadata
 
 ```sh
-grlg info goldsrc_geo_full.bin
+ipatlas info ipatlas_full.bin
 ```
 
 ### 4. Benchmark Throughput
 
 ```sh
-grlg benchmark goldsrc_geo_full.bin -n 100000
+ipatlas benchmark ipatlas_full.bin -n 100000
 ```
-
----
 
 ## Python API
 
 ```python
-from grlg.reader import GrlgReader
+from ipatlas import IpAtlasReader
 
-with GrlgReader("goldsrc_geo_full.bin") as reader:
+with IpAtlasReader("ipatlas_full.bin") as reader:
     record = reader.lookup("1.1.1.1")
     if record:
         print(f"Country: {record.country}, City: {record.city}")
@@ -121,26 +118,29 @@ with GrlgReader("goldsrc_geo_full.bin") as reader:
         print(f"Is Botnet:      {record.flags.is_botnet}")
 ```
 
----
-
 ## Binary Format Specification
 
 All multi-byte integers are stored in **Little-Endian** format (`<`).
 
-### Full Unified Layout (Version 3)
+### Full Unified Layout (Version 4 with Profile Normalization)
 
-- **Header (60 bytes)**:
-  - `magic` (4B): `b'GRLG'`
-  - `version` (2B): `0x0003`
+- **Header (68 bytes)**:
+  - `magic` (4B): `b'ATLS'` (or legacy `b'GRLG'`)
+  - `version` (2B): `0x0004`
   - `total_records` (4B): `uint32`
-  - `record_size` (2B): `28`
+  - `record_size` (2B): `12`
+  - `profile_count` (4B): `uint32` (e.g. 159,501)
+  - `profile_offset` (4B): `uint32`
   - `city_count` (4B), `c_idx_off` (4B), `c_data_off` (4B), `c_data_len` (4B)
   - `reg_count` (4B), `r_idx_off` (4B), `r_data_off` (4B), `r_data_len` (4B)
   - `isp_count` (4B), `i_idx_off` (4B), `i_data_off` (4B), `i_data_len` (4B)
 
-- **Record Structure (28 bytes)**:
+- **Range Record Structure (12 bytes)**:
   - `ip_from` (4B, `uint32`)
   - `ip_to` (4B, `uint32`)
+  - `profile_id` (4B, `uint32`)
+
+- **Profile Record Structure (20 bytes)**:
   - `city_idx` (4B, `uint32`)
   - `asn` (4B, `uint32`)
   - `country` (2B, `char[2]`)
@@ -163,8 +163,6 @@ All multi-byte integers are stored in **Little-Endian** format (`<`).
   - `0x0200` — Port / Vulnerability Scanner (`SCANNER`)
   - `0x0400` — DDoS / Botnet Node (`BOTNET`)
   - `0x0800` — Proxy / VPN Anonymizer (`PROXY`)
-
----
 
 ## Data Attribution & License
 

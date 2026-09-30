@@ -1,10 +1,8 @@
 """
-GRLG Database Compiler.
+IPAtlas Database Compiler.
 
-Supports:
-- Full Unified Database: DB5 (Geo) + PX10 (Proxy/Threats) with 1D streaming interval sweep.
-- Proxy-Only Database: PX10 (Proxy, Datacenter, Botnet, ASN, ISP).
-- Geo-Only Database: DB5 (Country, Region, City, Latitude, Longitude).
+Ultra-fast zero-copy binary GeoIP and Proxy/VPN threat database compiler.
+Supports any IP2Location DB (DB1-DB26) and IP2Proxy PX (PX1-PX11) CSV dataset.
 """
 
 import csv
@@ -12,7 +10,10 @@ import struct
 import time
 import os
 import zlib
-from typing import Optional, Callable
+import subprocess
+from typing import Optional, Callable, Tuple, Iterator
+
+MAGIC = b'ATLS'
 
 USAGE_FLAGS = {
     'DCH': 0x0001, # Datacenter / Web Hosting (VPN / Proxy / Bot origin)
@@ -37,41 +38,63 @@ PROXY_FLAG = 0x0800 # Proxy / Anonymizer
 
 def parse_px_flags(usage_str: str, threat_str: str) -> int:
     flags = PROXY_FLAG
-    for u in usage_str.split('/'):
-        flags |= USAGE_FLAGS.get(u, 0)
-    for t, mask in THREAT_FLAGS.items():
-        if t in threat_str:
-            flags |= mask
+    if usage_str:
+        for u in usage_str.split('/'):
+            flags |= USAGE_FLAGS.get(u, 0)
+    if threat_str:
+        for t, mask in THREAT_FLAGS.items():
+            if t in threat_str:
+                flags |= mask
     return flags
+
+def _safe_float_latlon(val: str) -> int:
+    try:
+        return int(round(float(val) * 100))
+    except (ValueError, TypeError):
+        return 0
+
+def _safe_asn(val: str) -> int:
+    try:
+        # Strip potential 'AS' prefix
+        if val.upper().startswith("AS"):
+            val = val[2:]
+        return int(val) & 0xFFFFFFFF
+    except (ValueError, TypeError):
+        return 0
 
 def compile_database(
     mode: str,
     output_path: str,
+    db_path: Optional[str] = None,
+    px_path: Optional[str] = None,
+    # Backwards compatibility kwargs
     db5_path: Optional[str] = None,
     px10_path: Optional[str] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> dict:
-    """Compiles CSV database into GRLG binary format and compressed archive."""
+    """Compiles IP2Location and IP2Proxy CSV datasets into IPAtlas binary and archives."""
     log = progress_callback or print
+    geo_csv = db_path or db5_path
+    proxy_csv = px_path or px10_path
 
     if mode == "full":
-        if not db5_path or not px10_path:
-            raise ValueError("mode='full' requires both db5_path and px10_path")
-        return _compile_full(db5_path, px10_path, output_path, log)
+        if not geo_csv or not proxy_csv:
+            raise ValueError("mode='full' requires both db_path (or db5_path) and px_path (or px10_path)")
+        return _compile_full(geo_csv, proxy_csv, output_path, log)
     elif mode == "proxy":
-        if not px10_path:
-            raise ValueError("mode='proxy' requires px10_path")
-        return _compile_proxy_only(px10_path, output_path, log)
+        if not proxy_csv:
+            raise ValueError("mode='proxy' requires px_path (or px10_path)")
+        return _compile_proxy_only(proxy_csv, output_path, log)
     elif mode == "geo":
-        if not db5_path:
-            raise ValueError("mode='geo' requires db5_path")
-        return _compile_geo_only(db5_path, output_path, log)
+        if not geo_csv:
+            raise ValueError("mode='geo' requires db_path (or db5_path)")
+        return _compile_geo_only(geo_csv, output_path, log)
     else:
         raise ValueError(f"Unknown mode: {mode}. Choose 'full', 'proxy', or 'geo'.")
 
-def _compile_full(db5_path: str, px10_path: str, bin_out_path: str, log: Callable) -> dict:
+def _compile_full(geo_path: str, px_path: str, bin_out_path: str, log: Callable) -> dict:
     start = time.time()
-    log(f"Compiling Unified Full Database (DB5 + PX10)...")
+    log("Compiling Unified Full Database...")
     
     cities_map = {"": 0, "-": 0}
     cities_list = [""]
@@ -98,37 +121,49 @@ def _compile_full(db5_path: str, px10_path: str, bin_out_path: str, log: Callabl
             isps_list.append(name)
         return isps_map[name]
 
-    def stream_db5():
-        with open(db5_path, 'r', encoding='utf-8') as f:
+    def stream_geo():
+        with open(geo_path, 'r', encoding='utf-8') as f:
             for row in csv.reader(f):
+                if not row or not row[0].isdigit():
+                    continue
                 ip_from = int(row[0])
                 ip_to = int(row[1])
-                cc = row[2][:2].encode('ascii', errors='ignore')
+                cc = row[2][:2].encode('ascii', errors='ignore') if len(row) > 2 else b"--"
                 if len(cc) < 2: cc = b"--"
-                reg_idx = get_region_idx(row[4])
-                city_idx = get_city_idx(row[5])
-                try: lat = int(round(float(row[6]) * 100))
-                except ValueError: lat = 0
-                try: lon = int(round(float(row[7]) * 100))
-                except ValueError: lon = 0
+                
+                # Dynamic column mapping:
+                # DB1:  ip_from(0), ip_to(1), cc(2), country_name(3)
+                # DB3+: ... region(4), city(5)
+                # DB5+: ... lat(6), lon(7)
+                reg_idx = get_region_idx(row[4]) if len(row) > 4 else 0
+                city_idx = get_city_idx(row[5]) if len(row) > 5 else 0
+                lat = _safe_float_latlon(row[6]) if len(row) > 6 else 0
+                lon = _safe_float_latlon(row[7]) if len(row) > 7 else 0
+                
                 yield (ip_from, ip_to, city_idx, cc, reg_idx, lat, lon)
 
-    def stream_px10():
-        with open(px10_path, 'r', encoding='utf-8') as f:
+    def stream_px():
+        with open(px_path, 'r', encoding='utf-8') as f:
             for row in csv.reader(f):
+                if not row or not row[0].isdigit():
+                    continue
                 ip_from = int(row[0])
                 ip_to = int(row[1])
-                isp_idx = get_isp_idx(row[7])
-                try: asn = int(row[10]) & 0xFFFFFFFF
-                except ValueError: asn = 0
-                flags = parse_px_flags(row[9], row[13])
+                # PX1: ip_from(0), ip_to(1), proxy_type(2), cc(3), country_name(4)
+                # PX2+: ... region(5), city(6), isp(7), domain(8), usage(9), asn(10), as_name(11), last_seen(12), threat(13)
+                isp_str = row[7] if len(row) > 7 else ""
+                isp_idx = get_isp_idx(isp_str)
+                asn = _safe_asn(row[10]) if len(row) > 10 else 0
+                usage = row[9] if len(row) > 9 else ""
+                threat = row[13] if len(row) > 13 else ""
+                flags = parse_px_flags(usage, threat)
                 yield (ip_from, ip_to, isp_idx, asn, flags)
 
-    db5_iter = stream_db5()
-    px10_iter = stream_px10()
+    geo_iter = stream_geo()
+    px_iter = stream_px()
     
-    cur_geo = next(db5_iter, None)
-    cur_px = next(px10_iter, None)
+    cur_geo = next(geo_iter, None)
+    cur_px = next(px_iter, None)
     
     merged_records = []
     
@@ -136,11 +171,11 @@ def _compile_full(db5_path: str, px10_path: str, bin_out_path: str, log: Callabl
         g_from, g_to, city_idx, cc, reg_idx, lat, lon = cur_geo
         
         while cur_px is not None and cur_px[1] < g_from:
-            cur_px = next(px10_iter, None)
+            cur_px = next(px_iter, None)
             
         if cur_px is None or cur_px[0] > g_to:
             merged_records.append((g_from, g_to, city_idx, 0, cc, reg_idx, 0, 0, lat, lon))
-            cur_geo = next(db5_iter, None)
+            cur_geo = next(geo_iter, None)
         else:
             p_from, p_to, isp_idx, asn, flags = cur_px
             
@@ -152,12 +187,12 @@ def _compile_full(db5_path: str, px10_path: str, bin_out_path: str, log: Callabl
             merged_records.append((g_from, overlap_end, city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon))
             
             if g_to == overlap_end:
-                cur_geo = next(db5_iter, None)
+                cur_geo = next(geo_iter, None)
                 if p_to == overlap_end:
-                    cur_px = next(px10_iter, None)
+                    cur_px = next(px_iter, None)
             else:
                 cur_geo = (overlap_end + 1, g_to, city_idx, cc, reg_idx, lat, lon)
-                cur_px = next(px10_iter, None)
+                cur_px = next(px_iter, None)
 
     # Coalescing adjacent identical intervals
     coalesced = []
@@ -171,6 +206,20 @@ def _compile_full(db5_path: str, px10_path: str, bin_out_path: str, log: Callabl
             prev = r
     if prev is not None:
         coalesced.append(prev)
+
+    # Build Profile ID normalization dictionary
+    prof_map = {}
+    prof_list = []
+    ranges_v4 = []
+    
+    for r in coalesced:
+        ip_from, ip_to, city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon = r
+        p_key = (city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon)
+        if p_key not in prof_map:
+            prof_map[p_key] = len(prof_list)
+            prof_list.append(p_key)
+        prof_id = prof_map[p_key]
+        ranges_v4.append((ip_from, ip_to, prof_id))
 
     # Serialize string blobs
     cities_blob = bytearray()
@@ -194,10 +243,12 @@ def _compile_full(db5_path: str, px10_path: str, bin_out_path: str, log: Callabl
         isps_blob.extend(isp.encode('utf-8'))
         isps_blob.append(0)
         
-    header_size = 60 # 60 bytes header
-    records_size = len(coalesced) * 28 # 28 bytes per record
+    header_size = 68 # 68 bytes header (with prof_count, prof_offset)
+    records_size = len(ranges_v4) * 12 # 12 bytes per IP range
+    prof_size = len(prof_list) * 20 # 20 bytes per unique profile
     
-    c_idx_off = header_size + records_size
+    prof_offset = header_size + records_size
+    c_idx_off = prof_offset + prof_size
     c_idx_len = len(city_offsets) * 4
     c_data_off = c_idx_off + c_idx_len
     c_data_len = len(cities_blob)
@@ -215,11 +266,13 @@ def _compile_full(db5_path: str, px10_path: str, bin_out_path: str, log: Callabl
     os.makedirs(os.path.dirname(os.path.abspath(bin_out_path)), exist_ok=True)
     with open(bin_out_path, 'wb') as f:
         f.write(struct.pack(
-            '<4sHIHIIIIIIIIIIII',
-            b'GRLG',
-            3, # version 3 = Full Unified
-            len(coalesced),
-            28, # record size
+            '<4sHIHIIIIIIIIIIIIII',
+            MAGIC,
+            4, # version 4 = Full Unified with Profile ID Normalization
+            len(ranges_v4),
+            12, # record size = 12 bytes
+            len(prof_list),
+            prof_offset,
             len(cities_list),
             c_idx_off, c_data_off, c_data_len,
             len(regions_list),
@@ -227,9 +280,12 @@ def _compile_full(db5_path: str, px10_path: str, bin_out_path: str, log: Callabl
             len(isps_list),
             i_idx_off, i_data_off, i_data_len
         ))
-        for r in coalesced:
-            ip_from, ip_to, city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon = r
-            f.write(struct.pack('<IIII2sHHHhh', ip_from, ip_to, city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon))
+        for r in ranges_v4:
+            f.write(struct.pack('<III', r[0], r[1], r[2]))
+            
+        for p in prof_list:
+            city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon = p
+            f.write(struct.pack('<II2sHHHhh', city_idx, asn, cc, reg_idx, isp_idx, flags, lat, lon))
             
         for off in city_offsets: f.write(struct.pack('<I', off))
         f.write(cities_blob)
@@ -244,27 +300,42 @@ def _compile_full(db5_path: str, px10_path: str, bin_out_path: str, log: Callabl
         compressed = zlib.compress(f_in.read(), level=9)
         f_out.write(compressed)
     gz_size = os.path.getsize(gz_path)
-    total_csv_size = os.path.getsize(db5_path) + os.path.getsize(px10_path)
+    
+    # Try compressing with zstd if available
+    zst_size = None
+    zst_path = bin_out_path + ".zst"
+    try:
+        res = subprocess.run(['zstd', '-19', '-f', bin_out_path, '-o', zst_path], capture_output=True)
+        if res.returncode == 0 and os.path.exists(zst_path):
+            zst_size = os.path.getsize(zst_path)
+    except Exception:
+        zst_size = None
+
+    total_csv_size = os.path.getsize(geo_path) + os.path.getsize(px_path)
     
     elapsed = time.time() - start
     stats = {
         "mode": "full",
-        "records": len(coalesced),
+        "records": len(ranges_v4),
+        "profiles": len(prof_list),
         "cities": len(cities_list),
         "regions": len(regions_list),
         "isps": len(isps_list),
         "raw_size": raw_size,
         "gz_size": gz_size,
+        "zst_size": zst_size,
         "csv_size": total_csv_size,
         "compression_ratio": round(total_csv_size / gz_size, 2),
+        "zst_ratio": round(total_csv_size / zst_size, 2) if zst_size else None,
         "elapsed_seconds": round(elapsed, 2)
     }
-    log(f"Compiled {len(coalesced):,} intervals in {elapsed:.2f}s | Binary: {raw_size/(1024*1024):.1f} MB | GZ: {gz_size/(1024*1024):.1f} MB ({stats['compression_ratio']}x)")
+    zst_msg = f" | ZST: {zst_size/(1024*1024):.1f} MB ({stats['zst_ratio']}x)" if zst_size else ""
+    log(f"Compiled {len(ranges_v4):,} intervals ({len(prof_list):,} profiles) in {elapsed:.2f}s | Binary: {raw_size/(1024*1024):.1f} MB | GZ: {gz_size/(1024*1024):.1f} MB ({stats['compression_ratio']}x){zst_msg}")
     return stats
 
-def _compile_proxy_only(px10_path: str, bin_out_path: str, log: Callable) -> dict:
+def _compile_proxy_only(px_path: str, bin_out_path: str, log: Callable) -> dict:
     start = time.time()
-    log(f"Compiling Proxy-Only Database (PX10)...")
+    log("Compiling Proxy-Only Database...")
     
     cities_map = {"": 0, "-": 0}
     cities_list = [""]
@@ -276,14 +347,16 @@ def _compile_proxy_only(px10_path: str, bin_out_path: str, log: Callable) -> dic
     prev_to = None
     prev_meta = None
     
-    with open(px10_path, 'r', encoding='utf-8') as f:
+    with open(px_path, 'r', encoding='utf-8') as f:
         for row in csv.reader(f):
+            if not row or not row[0].isdigit():
+                continue
             ip_from = int(row[0])
             ip_to = int(row[1])
-            cc = row[3][:2].encode('ascii', errors='ignore')
+            cc = row[3][:2].encode('ascii', errors='ignore') if len(row) > 3 else b"--"
             if len(cc) < 2: cc = b"--"
-            city_str = row[6]
-            isp_str = row[7]
+            city_str = row[6] if len(row) > 6 else ""
+            isp_str = row[7] if len(row) > 7 else ""
             
             if city_str not in cities_map:
                 cities_map[city_str] = len(cities_list)
@@ -295,9 +368,10 @@ def _compile_proxy_only(px10_path: str, bin_out_path: str, log: Callable) -> dic
                 isps_list.append(isp_str)
             isp_idx = isps_map[isp_str]
             
-            try: asn = int(row[10]) & 0xFFFFFFFF
-            except ValueError: asn = 0
-            flags = parse_px_flags(row[9], row[13])
+            asn = _safe_asn(row[10]) if len(row) > 10 else 0
+            usage = row[9] if len(row) > 9 else ""
+            threat = row[13] if len(row) > 13 else ""
+            flags = parse_px_flags(usage, threat)
             
             meta = (asn, city_idx, isp_idx, cc, flags)
             if prev_meta is not None and prev_to + 1 == ip_from and meta == prev_meta:
@@ -343,7 +417,7 @@ def _compile_proxy_only(px10_path: str, bin_out_path: str, log: Callable) -> dic
     with open(bin_out_path, 'wb') as f:
         f.write(struct.pack(
             '<4sHIHIIIIIIII',
-            b'GRLG',
+            MAGIC,
             1, # version 1 = Proxy Only
             len(records),
             20,
@@ -366,8 +440,17 @@ def _compile_proxy_only(px10_path: str, bin_out_path: str, log: Callable) -> dic
         compressed = zlib.compress(f_in.read(), level=9)
         f_out.write(compressed)
     gz_size = os.path.getsize(gz_path)
-    csv_size = os.path.getsize(px10_path)
     
+    zst_size = None
+    zst_path = bin_out_path + ".zst"
+    try:
+        res = subprocess.run(['zstd', '-19', '-f', bin_out_path, '-o', zst_path], capture_output=True)
+        if res.returncode == 0 and os.path.exists(zst_path):
+            zst_size = os.path.getsize(zst_path)
+    except Exception:
+        zst_size = None
+
+    csv_size = os.path.getsize(px_path)
     elapsed = time.time() - start
     stats = {
         "mode": "proxy",
@@ -376,16 +459,19 @@ def _compile_proxy_only(px10_path: str, bin_out_path: str, log: Callable) -> dic
         "isps": len(isps_list),
         "raw_size": raw_size,
         "gz_size": gz_size,
+        "zst_size": zst_size,
         "csv_size": csv_size,
         "compression_ratio": round(csv_size / gz_size, 2),
+        "zst_ratio": round(csv_size / zst_size, 2) if zst_size else None,
         "elapsed_seconds": round(elapsed, 2)
     }
-    log(f"Compiled {len(records):,} proxy records in {elapsed:.2f}s | Binary: {raw_size/(1024*1024):.1f} MB | GZ: {gz_size/(1024*1024):.1f} MB ({stats['compression_ratio']}x)")
+    zst_msg = f" | ZST: {zst_size/(1024*1024):.1f} MB ({stats['zst_ratio']}x)" if zst_size else ""
+    log(f"Compiled {len(records):,} proxy records in {elapsed:.2f}s | Binary: {raw_size/(1024*1024):.1f} MB | GZ: {gz_size/(1024*1024):.1f} MB ({stats['compression_ratio']}x){zst_msg}")
     return stats
 
-def _compile_geo_only(db5_path: str, bin_out_path: str, log: Callable) -> dict:
+def _compile_geo_only(geo_path: str, bin_out_path: str, log: Callable) -> dict:
     start = time.time()
-    log(f"Compiling Geo-Only Database (DB5)...")
+    log("Compiling Geo-Only Database...")
     
     cities_map = {"": 0, "-": 0}
     cities_list = [""]
@@ -397,19 +483,18 @@ def _compile_geo_only(db5_path: str, bin_out_path: str, log: Callable) -> dict:
     prev_to = None
     prev_meta = None
     
-    with open(db5_path, 'r', encoding='utf-8') as f:
+    with open(geo_path, 'r', encoding='utf-8') as f:
         for row in csv.reader(f):
+            if not row or not row[0].isdigit():
+                continue
             ip_from = int(row[0])
             ip_to = int(row[1])
-            cc = row[2][:2].encode('ascii', errors='ignore')
+            cc = row[2][:2].encode('ascii', errors='ignore') if len(row) > 2 else b"--"
             if len(cc) < 2: cc = b"--"
-            reg_str = row[4]
-            city_str = row[5]
-            
-            try: lat = int(round(float(row[6]) * 100))
-            except ValueError: lat = 0
-            try: lon = int(round(float(row[7]) * 100))
-            except ValueError: lon = 0
+            reg_str = row[4] if len(row) > 4 else ""
+            city_str = row[5] if len(row) > 5 else ""
+            lat = _safe_float_latlon(row[6]) if len(row) > 6 else 0
+            lon = _safe_float_latlon(row[7]) if len(row) > 7 else 0
             
             if city_str not in cities_map:
                 cities_map[city_str] = len(cities_list)
@@ -465,7 +550,7 @@ def _compile_geo_only(db5_path: str, bin_out_path: str, log: Callable) -> dict:
     with open(bin_out_path, 'wb') as f:
         f.write(struct.pack(
             '<4sHIHIIIIIIII',
-            b'GRLG',
+            MAGIC,
             2, # version 2 = Geo Only
             len(records),
             20,
@@ -488,8 +573,17 @@ def _compile_geo_only(db5_path: str, bin_out_path: str, log: Callable) -> dict:
         compressed = zlib.compress(f_in.read(), level=9)
         f_out.write(compressed)
     gz_size = os.path.getsize(gz_path)
-    csv_size = os.path.getsize(db5_path)
     
+    zst_size = None
+    zst_path = bin_out_path + ".zst"
+    try:
+        res = subprocess.run(['zstd', '-19', '-f', bin_out_path, '-o', zst_path], capture_output=True)
+        if res.returncode == 0 and os.path.exists(zst_path):
+            zst_size = os.path.getsize(zst_path)
+    except Exception:
+        zst_size = None
+
+    csv_size = os.path.getsize(geo_path)
     elapsed = time.time() - start
     stats = {
         "mode": "geo",
@@ -498,9 +592,12 @@ def _compile_geo_only(db5_path: str, bin_out_path: str, log: Callable) -> dict:
         "regions": len(regions_list),
         "raw_size": raw_size,
         "gz_size": gz_size,
+        "zst_size": zst_size,
         "csv_size": csv_size,
         "compression_ratio": round(csv_size / gz_size, 2),
+        "zst_ratio": round(csv_size / zst_size, 2) if zst_size else None,
         "elapsed_seconds": round(elapsed, 2)
     }
-    log(f"Compiled {len(records):,} geo records in {elapsed:.2f}s | Binary: {raw_size/(1024*1024):.1f} MB | GZ: {gz_size/(1024*1024):.1f} MB ({stats['compression_ratio']}x)")
+    zst_msg = f" | ZST: {zst_size/(1024*1024):.1f} MB ({stats['zst_ratio']}x)" if zst_size else ""
+    log(f"Compiled {len(records):,} geo records in {elapsed:.2f}s | Binary: {raw_size/(1024*1024):.1f} MB | GZ: {gz_size/(1024*1024):.1f} MB ({stats['compression_ratio']}x){zst_msg}")
     return stats

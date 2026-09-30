@@ -1,5 +1,5 @@
 """
-GRLG Command-Line Interface.
+IPAtlas Command-Line Interface.
 """
 
 import argparse
@@ -7,29 +7,29 @@ import sys
 import time
 import os
 from .compiler import compile_database
-from .reader import GrlgReader
+from .reader import IpAtlasReader
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="grlg",
-        description="GRLG: Ultra-fast Zero-Copy Binary GeoIP & Proxy Threat Database Tool"
+        prog="ipatlas",
+        description="IPAtlas: Ultra-fast Zero-Copy Binary GeoIP & Proxy Threat Database Tool"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # compile
-    p_comp = subparsers.add_parser("compile", help="Compile CSV dataset(s) into GRLG binary and .gz")
-    p_comp.add_argument("--mode", choices=["full", "proxy", "geo"], default="full", help="Compilation mode")
-    p_comp.add_argument("--db5", help="Path to IP2LOCATION-LITE-DB5.CSV")
-    p_comp.add_argument("--px10", help="Path to IP2PROXY-LITE-PX10.CSV")
+    p_comp = subparsers.add_parser("compile", help="Compile CSV dataset(s) into IPAtlas binary and archives")
+    p_comp.add_argument("--mode", choices=["full", "proxy", "geo"], default="full", help="Compilation mode (default: full)")
+    p_comp.add_argument("--geo", "--db", "--db5", dest="geo", help="Path to IP2Location CSV (DB1, DB3, DB5, DB11, etc.)")
+    p_comp.add_argument("--proxy", "--px", "--px10", dest="proxy", help="Path to IP2Proxy CSV (PX1 - PX12)")
     p_comp.add_argument("--out", "-o", required=True, help="Output binary path (.bin)")
 
     # lookup
-    p_look = subparsers.add_parser("lookup", help="Query an IP address in GRLG database")
+    p_look = subparsers.add_parser("lookup", help="Query an IP address in IPAtlas database")
     p_look.add_argument("database", help="Path to .bin database")
     p_look.add_argument("ip", help="IPv4 address to look up")
 
     # info
-    p_info = subparsers.add_parser("info", help="Inspect GRLG database header and stats")
+    p_info = subparsers.add_parser("info", help="Inspect IPAtlas database header and stats")
     p_info.add_argument("database", help="Path to .bin database")
 
     # benchmark
@@ -44,8 +44,8 @@ def main():
             compile_database(
                 mode=args.mode,
                 output_path=args.out,
-                db5_path=args.db5,
-                px10_path=args.px10,
+                db_path=args.geo,
+                px_path=args.proxy,
                 progress_callback=print
             )
         except Exception as e:
@@ -54,7 +54,7 @@ def main():
     elif args.command == "lookup":
         if not os.path.exists(args.database):
             sys.exit(f"Database not found: {args.database}")
-        with GrlgReader(args.database) as reader:
+        with IpAtlasReader(args.database) as reader:
             t0 = time.perf_counter()
             rec = reader.lookup(args.ip)
             dt_us = (time.perf_counter() - t0) * 1e6
@@ -62,8 +62,8 @@ def main():
                 print(f"IP:          {rec.ip}")
                 print(f"Range:       {rec.range}")
                 print(f"Country:     {rec.country}")
-                print(f"Region:      {rec.region}")
-                print(f"City:        {rec.city}")
+                print(f"Region:      {rec.region or 'N/A'}")
+                print(f"City:        {rec.city or 'N/A'}")
                 print(f"Coordinates: {rec.latitude:.2f}, {rec.longitude:.2f}")
                 print(f"ISP:         {rec.isp or 'N/A'}")
                 print(f"ASN:         AS{rec.asn if rec.asn else 'N/A'}")
@@ -81,13 +81,15 @@ def main():
     elif args.command == "info":
         if not os.path.exists(args.database):
             sys.exit(f"Database not found: {args.database}")
-        with GrlgReader(args.database) as reader:
-            mode_str = {1: "Proxy-Only", 2: "Geo-Only", 3: "Unified Full"}.get(reader.version, "Unknown")
+        with IpAtlasReader(args.database) as reader:
+            mode_str = {1: "Proxy-Only", 2: "Geo-Only", 4: "Unified Full"}.get(reader.version, f"Version {reader.version}")
             size_mb = os.path.getsize(args.database) / (1024 * 1024)
             print(f"Database:      {args.database}")
-            print(f"Format:        GRLG Version {reader.version} ({mode_str})")
+            print(f"Format:        IPAtlas Version {reader.version} ({mode_str})")
             print(f"Records:       {reader.total_records:,}")
             print(f"Record Size:   {reader.record_size} bytes")
+            if getattr(reader, 'total_profiles', 0) > 0:
+                print(f"Profiles:      {reader.total_profiles:,}")
             print(f"Indexed Cities: {len(reader._city_offsets):,}")
             print(f"Indexed Regions:{len(reader._region_offsets):,}")
             print(f"Indexed ISPs:  {len(reader._isp_offsets):,}")
@@ -100,7 +102,7 @@ def main():
         # Generate random IPs
         ips = [f"{random.randint(1,220)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}" for _ in range(args.count)]
         print(f"Benchmarking {args.count:,} lookups against {args.database}...")
-        with GrlgReader(args.database) as reader:
+        with IpAtlasReader(args.database) as reader:
             t0 = time.perf_counter()
             found = 0
             for ip in ips:
