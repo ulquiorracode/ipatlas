@@ -22,10 +22,20 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies
+      - name: Install system dependencies (zstd)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd
+
+      - name: Install package
         run: |
           pip install .
 
-      - name: Run unit tests
+      - name: Run unit & edge cases tests
         run: |
           python -m unittest discover tests
+
+      - name: Run benchmark sanity check
+        run: |
+          python -m benchmarks.bench_presets
+          python -m benchmarks.bench_lookup

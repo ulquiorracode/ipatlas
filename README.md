@@ -139,7 +139,7 @@ All multi-byte integers are stored in **Little-Endian** format (`<`).
 ### Full Unified Layout (Version 4 with Profile Normalization)
 
 - **Header (68 bytes)**:
-  - `magic` (4B): `b'ATLS'` (or legacy `b'GRLG'`)
+  - `magic` (4B): `b'ATLS'`
   - `version` (2B): `0x0004`
   - `total_records` (4B): `uint32`
   - `record_size` (2B): `12`

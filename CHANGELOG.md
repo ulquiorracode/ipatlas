@@ -19,13 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Rebranding**: Project renamed from `grlg-geo` to `ipatlas`. CLI entry point renamed to `ipatlas`.
-- **Binary Header**: Magic updated to `b'ATLS'` (with backward compatibility for `b'GRLG'`).
+- **Binary Header**: Magic updated to `b'ATLS'`.
 - **Memory Footprint**: Reduced uncompressed binary size by **55.2%** (from 214.1 MB down to 95.9 MB for unified full global dataset).
-
-### Deprecated / Compatibility
-
-- `GrlgReader` alias preserved in Python SDK for backward compatibility with `IpAtlasReader`.
-- Legacy CLI flags (`--db5`, `--px10`) retained as aliases.
 
 ## [0.1.0] - 2026-09-29
 
