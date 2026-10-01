@@ -1,5 +1,5 @@
 """
-GRLG Zero-Copy Binary Search Reader.
+IPAtlas Zero-Copy Binary Search Reader.
 
 Performs sub-microsecond IP lookups via mmap over flat array intervals.
 """
@@ -83,7 +83,7 @@ class IpAtlasReader:
             
             # Read magic and version
             magic, ver = struct.unpack('<4sH', self._mm[:6])
-            if magic not in (b'ATLS', b'GRLG'):
+            if magic != b'ATLS':
                 raise ValueError(f"Invalid IPAtlas magic: {magic}")
             self.version = ver
             
@@ -234,5 +234,4 @@ class IpAtlasReader:
 
         return None
 
-# Backwards compatibility alias
-GrlgReader = IpAtlasReader
+

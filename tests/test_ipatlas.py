@@ -4,7 +4,7 @@ import socket
 import struct
 import unittest
 from ipatlas.compiler import compile_database
-from ipatlas.reader import IpAtlasReader, GrlgReader
+from ipatlas.reader import IpAtlasReader
 
 def ip2int(ip_str: str) -> int:
     return struct.unpack('!I', socket.inet_aton(ip_str))[0]
@@ -146,7 +146,7 @@ class TestIpAtlas(unittest.TestCase):
             px_path=self.px10_path,
         )
         self.assertEqual(stats["records"], 1)
-        with GrlgReader(out_bin) as reader: # Test backwards compatibility alias
+        with IpAtlasReader(out_bin) as reader:
             rec = reader.lookup("1.0.20.100")
             self.assertIsNotNone(rec)
             self.assertEqual(rec.isp, "DataCenter Host")
