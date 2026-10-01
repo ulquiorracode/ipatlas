@@ -4,6 +4,7 @@ GRLG Zero-Copy Binary Search Reader.
 Performs sub-microsecond IP lookups via mmap over flat array intervals.
 """
 
+import os
 import mmap
 import struct
 import socket
@@ -72,74 +73,88 @@ class IpAtlasReader:
     def __init__(self, filepath: str):
         self.filepath = filepath
         self._f = open(filepath, 'rb')
-        self._mm = mmap.mmap(self._f.fileno(), 0, access=mmap.ACCESS_READ)
-        
-        # Read magic and version
-        magic, ver = struct.unpack('<4sH', self._mm[:6])
-        if magic not in (b'ATLS', b'GRLG'):
-            raise ValueError(f"Invalid IPAtlas magic: {magic}")
-        self.version = ver
-        
-        if self.version == 4: # Full Unified with Profile ID Normalization (68 bytes header)
-            hdr = struct.unpack('<4sHIHIIIIIIIIIIIIII', self._mm[:68])
-            self.total_records = hdr[2]
-            self.record_size = hdr[3]
-            self.total_profiles = hdr[4]
-            self.prof_offset = hdr[5]
-            self.header_size = 68
+        self._mm = None
+        try:
+            file_size = os.fstat(self._f.fileno()).st_size
+            if file_size < 44:
+                raise ValueError(f"Corrupted or truncated IPAtlas file (size: {file_size} bytes)")
+
+            self._mm = mmap.mmap(self._f.fileno(), 0, access=mmap.ACCESS_READ)
             
-            c_cnt, c_i_off, c_d_off, c_d_len = hdr[6], hdr[7], hdr[8], hdr[9]
-            r_cnt, r_i_off, r_d_off, r_d_len = hdr[10], hdr[11], hdr[12], hdr[13]
-            i_cnt, i_i_off, i_d_off, i_d_len = hdr[14], hdr[15], hdr[16], hdr[17]
+            # Read magic and version
+            magic, ver = struct.unpack('<4sH', self._mm[:6])
+            if magic not in (b'ATLS', b'GRLG'):
+                raise ValueError(f"Invalid IPAtlas magic: {magic}")
+            self.version = ver
             
-            self._city_offsets = [struct.unpack('<I', self._mm[c_i_off + i*4:c_i_off + (i+1)*4])[0] for i in range(c_cnt)]
-            self._city_blob = self._mm[c_d_off:c_d_off + c_d_len]
-            
-            self._region_offsets = [struct.unpack('<I', self._mm[r_i_off + i*4:r_i_off + (i+1)*4])[0] for i in range(r_cnt)]
-            self._region_blob = self._mm[r_d_off:r_d_off + r_d_len]
-            
-            self._isp_offsets = [struct.unpack('<I', self._mm[i_i_off + i*4:i_i_off + (i+1)*4])[0] for i in range(i_cnt)]
-            self._isp_blob = self._mm[i_d_off:i_d_off + i_d_len]
-            
-        elif self.version == 1: # Proxy Only (44 bytes header)
-            hdr = struct.unpack('<4sHIHIIIIIIII', self._mm[:44])
-            self.total_records = hdr[2]
-            self.record_size = hdr[3]
-            self.total_profiles = 0
-            self.prof_offset = 0
-            self.header_size = 44
-            
-            c_cnt, c_i_off, c_d_off, c_d_len = hdr[4], hdr[5], hdr[6], hdr[7]
-            i_cnt, i_i_off, i_d_off, i_d_len = hdr[8], hdr[9], hdr[10], hdr[11]
-            
-            self._city_offsets = [struct.unpack('<I', self._mm[c_i_off + i*4:c_i_off + (i+1)*4])[0] for i in range(c_cnt)]
-            self._city_blob = self._mm[c_d_off:c_d_off + c_d_len]
-            self._region_offsets = []
-            self._region_blob = b""
-            
-            self._isp_offsets = [struct.unpack('<I', self._mm[i_i_off + i*4:i_i_off + (i+1)*4])[0] for i in range(i_cnt)]
-            self._isp_blob = self._mm[i_d_off:i_d_off + i_d_len]
-            
-        elif self.version == 2: # Geo Only (44 bytes header)
-            hdr = struct.unpack('<4sHIHIIIIIIII', self._mm[:44])
-            self.total_records = hdr[2]
-            self.record_size = hdr[3]
-            self.total_profiles = 0
-            self.prof_offset = 0
-            self.header_size = 44
-            
-            c_cnt, c_i_off, c_d_off, c_d_len = hdr[4], hdr[5], hdr[6], hdr[7]
-            r_cnt, r_i_off, r_d_off, r_d_len = hdr[8], hdr[9], hdr[10], hdr[11]
-            
-            self._city_offsets = [struct.unpack('<I', self._mm[c_i_off + i*4:c_i_off + (i+1)*4])[0] for i in range(c_cnt)]
-            self._city_blob = self._mm[c_d_off:c_d_off + c_d_len]
-            
-            self._region_offsets = [struct.unpack('<I', self._mm[r_i_off + i*4:r_i_off + (i+1)*4])[0] for i in range(r_cnt)]
-            self._region_blob = self._mm[r_d_off:r_d_off + r_d_len]
-            self._isp_offsets = []
-            self._isp_blob = b""
-        else:
-            raise ValueError(f"Unsupported GRLG version: {self.version}")
+            if self.version == 4: # Full Unified with Profile ID Normalization (68 bytes header)
+                if file_size < 68:
+                    raise ValueError(f"Truncated IPAtlas v4 header: {file_size} < 68 bytes")
+                hdr = struct.unpack('<4sHIHIIIIIIIIIIIIII', self._mm[:68])
+                self.total_records = hdr[2]
+                self.record_size = hdr[3]
+                self.total_profiles = hdr[4]
+                self.prof_offset = hdr[5]
+                self.header_size = 68
+                
+                c_cnt, c_i_off, c_d_off, c_d_len = hdr[6], hdr[7], hdr[8], hdr[9]
+                r_cnt, r_i_off, r_d_off, r_d_len = hdr[10], hdr[11], hdr[12], hdr[13]
+                i_cnt, i_i_off, i_d_off, i_d_len = hdr[14], hdr[15], hdr[16], hdr[17]
+                
+                self._city_offsets = [struct.unpack('<I', self._mm[c_i_off + i*4:c_i_off + (i+1)*4])[0] for i in range(c_cnt)]
+                self._city_blob = self._mm[c_d_off:c_d_off + c_d_len]
+                
+                self._region_offsets = [struct.unpack('<I', self._mm[r_i_off + i*4:r_i_off + (i+1)*4])[0] for i in range(r_cnt)]
+                self._region_blob = self._mm[r_d_off:r_d_off + r_d_len]
+                
+                self._isp_offsets = [struct.unpack('<I', self._mm[i_i_off + i*4:i_i_off + (i+1)*4])[0] for i in range(i_cnt)]
+                self._isp_blob = self._mm[i_d_off:i_d_off + i_d_len]
+                
+            elif self.version == 1: # Proxy Only (44 bytes header)
+                hdr = struct.unpack('<4sHIHIIIIIIII', self._mm[:44])
+                self.total_records = hdr[2]
+                self.record_size = hdr[3]
+                self.total_profiles = 0
+                self.prof_offset = 0
+                self.header_size = 44
+                
+                c_cnt, c_i_off, c_d_off, c_d_len = hdr[4], hdr[5], hdr[6], hdr[7]
+                i_cnt, i_i_off, i_d_off, i_d_len = hdr[8], hdr[9], hdr[10], hdr[11]
+                
+                self._city_offsets = [struct.unpack('<I', self._mm[c_i_off + i*4:c_i_off + (i+1)*4])[0] for i in range(c_cnt)]
+                self._city_blob = self._mm[c_d_off:c_d_off + c_d_len]
+                self._region_offsets = []
+                self._region_blob = b""
+                
+                self._isp_offsets = [struct.unpack('<I', self._mm[i_i_off + i*4:i_i_off + (i+1)*4])[0] for i in range(i_cnt)]
+                self._isp_blob = self._mm[i_d_off:i_d_off + i_d_len]
+                
+            elif self.version == 2: # Geo Only (44 bytes header)
+                hdr = struct.unpack('<4sHIHIIIIIIII', self._mm[:44])
+                self.total_records = hdr[2]
+                self.record_size = hdr[3]
+                self.total_profiles = 0
+                self.prof_offset = 0
+                self.header_size = 44
+                
+                c_cnt, c_i_off, c_d_off, c_d_len = hdr[4], hdr[5], hdr[6], hdr[7]
+                r_cnt, r_i_off, r_d_off, r_d_len = hdr[8], hdr[9], hdr[10], hdr[11]
+                
+                self._city_offsets = [struct.unpack('<I', self._mm[c_i_off + i*4:c_i_off + (i+1)*4])[0] for i in range(c_cnt)]
+                self._city_blob = self._mm[c_d_off:c_d_off + c_d_len]
+                
+                self._region_offsets = [struct.unpack('<I', self._mm[r_i_off + i*4:r_i_off + (i+1)*4])[0] for i in range(r_cnt)]
+                self._region_blob = self._mm[r_d_off:r_d_off + r_d_len]
+                self._isp_offsets = []
+                self._isp_blob = b""
+            else:
+                raise ValueError(f"Unsupported IPAtlas version: {self.version}")
+        except Exception:
+            self.close()
+            raise
+
+    def __len__(self) -> int:
+        return self.total_records
 
     def _get_string(self, offsets: list, blob: bytes, idx: int) -> str:
         if idx >= len(offsets):
