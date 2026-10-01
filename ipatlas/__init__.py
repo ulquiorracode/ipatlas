@@ -2,7 +2,7 @@
 IPAtlas: Ultra-fast Zero-Copy Binary GeoIP & Proxy Threat Database.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .reader import IpAtlasReader, GrlgReader, GeoRecord, GeoFlags
 from .compiler import (
