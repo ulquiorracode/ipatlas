@@ -30,6 +30,29 @@ Tested on raw IP2Location LITE DB5 and IP2Proxy LITE PX10 datasets:
 | **Geo-Only (DB5)** | 280 MB | 57.7 MB | 18.8 MB | 13.9 MB | 20.1x | 2,999,603 | — |
 | **Proxy-Only (PX10)** | 460 MB | 48.7 MB | 11.6 MB | 9.4 MB | 48.9x | 2,429,915 | — |
 
+### Preset Matrix (Cascade Coalescing)
+
+When compiling targeted databases, unused metadata fields are stripped and contiguous intervals automatically fuse together:
+
+| Preset | Active Fields | Primary Use Case | Binary (`.bin`) | Zstandard (`.zst`) | Ratio (vs CSV) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`country`** | `Country` | High-speed edge Geo-blocking | **5.6 MB** | **1.2 MB** | **233x** |
+| **`threats`** | `ASN, Threats` | Server/API threat & proxy filtering | **6.8 MB** | **2.1 MB** | **120x** |
+| **`firewall`** | `Country, ASN, Threats` | Firewall rules & access policies | **7.9 MB** | **2.5 MB** | **100x** |
+| **`city`** | `Country, Region, City, Coords` | Classical geolocation without threats | **38.0 MB** | **11.0 MB** | **20x** |
+| **`full`** | *All fields included* | Complete unified analytics & security | **95.9 MB** | **27.6 MB** | **26.8x** |
+
+### Why IPAtlas vs MaxMind GeoLite2 (`.mmdb`)?
+
+| Feature / Metric | MaxMind GeoLite2 (`.mmdb`) | IPAtlas (`.bin`) |
+| :--- | :--- | :--- |
+| **Data Scope** | Geo-Only (separate file for ASN) | **Unified**: Geo + ASN + VPN/Proxy/Threats in 1 file |
+| **Lookup Algorithm** | Radix Tree (128-bit bitwise descent) | **Flat Binary Search** $O(\log N)$ ($\le 23$ iterations) |
+| **Memory Access Pattern** | Non-contiguous pointer jumps across tree nodes | **Sequential slice access**, CPU L1/L2 cache friendly |
+| **Zero-Copy Readiness** | Requires complex tree decoding per node | **Instant struct unpack** directly from OS kernel page cache |
+| **Edge Footprint** | ~75 MB (City) / ~6 MB (Country) | **5.6 MB** (`country`) / **7.9 MB** (`firewall`) |
+| **Distribution Size** | ~35 MB (City tar.gz) | **1.2 MB** (`country.zst`) / **27.6 MB** (`full.zst`) |
+
 > [!NOTE]
 > **Version 4 Profile Normalization**: In Unified Full mode, 7.95 million ranges map onto only 159,501 unique metadata profiles `(Country, City, Region, ASN, ISP, Flags, Lat, Lon)`. Each range is reduced from **28 bytes to 12 bytes**, shrinking the uncompressed zero-copy mmap binary by **55.2%** (from 214 MB to 95.9 MB).
 
@@ -115,7 +138,23 @@ ipatlas info ipatlas_full.bin
 ### 4. Benchmark Throughput
 
 ```sh
+# Benchmark an existing binary database
 ipatlas benchmark ipatlas_full.bin -n 100000
+```
+
+## Running Tests & Benchmarks
+
+Run the automated test suite and edge cases (boundary conditions for `0.0.0.0`, `255.255.255.255`, and corrupted header resilience):
+
+```sh
+# Run all unit and robustness tests
+python -m unittest discover tests
+
+# Run lookup latency and throughput benchmark
+python -m benchmarks.bench_lookup
+
+# Run preset compression and coalesce ratio matrix
+python -m benchmarks.bench_presets
 ```
 
 ## Python API
