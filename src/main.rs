@@ -448,7 +448,7 @@ fn run_bench(args: BenchArgs) -> anyhow::Result<()> {
     let qps = (args.count as f64) / total_secs;
     let avg_ns = (total_time.as_nanos() as f64) / (args.count as f64);
 
-    println!("Completed in {:.3}s", total_secs);
+    println!("Completed in {:.3}s (Single-Threaded)", total_secs);
     println!("Throughput:      {} queries/sec", format_num(qps as u64));
     println!(
         "Average Latency: {:.1} ns/query ({:.3} µs)",
@@ -461,6 +461,34 @@ fn run_bench(args: BenchArgs) -> anyhow::Result<()> {
         format_num(args.count),
         (hits as f64 / args.count as f64) * 100.0
     );
+
+    // Multi-threaded benchmark via Rayon
+    use rayon::prelude::*;
+    let t_par = Instant::now();
+    let _par_hits: usize = test_ips
+        .par_iter()
+        .map(|&ip| {
+            if reader.lookup_u32(ip).is_some() {
+                1
+            } else {
+                0
+            }
+        })
+        .sum();
+    let total_secs_par = t_par.elapsed().as_secs_f64();
+    let qps_par = (args.count as f64) / total_secs_par;
+    let avg_ns_par = (t_par.elapsed().as_nanos() as f64) / (args.count as f64);
+
+    println!(
+        "\nMulti-Threaded Throughput (Rayon {} threads):",
+        rayon::current_num_threads()
+    );
+    println!(
+        "Throughput:      {} queries/sec",
+        format_num(qps_par as u64)
+    );
+    println!("Average Latency: {:.1} ns/query", avg_ns_par);
+    println!("Speedup Factor:  {:.1}x", qps_par / qps);
 
     Ok(())
 }

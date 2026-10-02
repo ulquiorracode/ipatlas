@@ -102,17 +102,28 @@ pub fn compile(options: CompilerOptions<'_>) -> Result<CompilationStats, Compile
         return Err(CompilerError::NoInputFiles);
     }
 
+    let mut cities = StringPool::new();
+    let mut regions = StringPool::new();
+    let mut isps = StringPool::new();
+    let prune_empty = options.opt.prune_empty;
+
     let mut writer = DatabaseWriter::new(options.opt.clone());
 
     // 1. Process IPv4 streams if present
     if has_v4 {
         let geo_iter: Box<dyn Iterator<Item = RawGeoRecord>> = match options.geo_path {
-            Some(p) => Box::new(stream_geo_file(p, options.features)?),
+            Some(p) => Box::new(stream_geo_file(
+                p,
+                options.features,
+                &mut cities,
+                &mut regions,
+                prune_empty,
+            )?),
             None => Box::new(std::iter::empty()),
         };
 
         let px_iter: Box<dyn Iterator<Item = RawPxRecord>> = match options.proxy_path {
-            Some(p) => Box::new(stream_px_file(p, options.features)?),
+            Some(p) => Box::new(stream_px_file(p, options.features, &mut isps, prune_empty)?),
             None => Box::new(std::iter::empty()),
         };
 
@@ -124,12 +135,23 @@ pub fn compile(options: CompilerOptions<'_>) -> Result<CompilationStats, Compile
     // 2. Process IPv6 streams if present
     if has_v6 {
         let geo_v6_iter: Box<dyn Iterator<Item = RawGeoRecordV6>> = match options.geo_v6_path {
-            Some(p) => Box::new(stream_geo_file_v6(p, options.features)?),
+            Some(p) => Box::new(stream_geo_file_v6(
+                p,
+                options.features,
+                &mut cities,
+                &mut regions,
+                prune_empty,
+            )?),
             None => Box::new(std::iter::empty()),
         };
 
         let px_v6_iter: Box<dyn Iterator<Item = RawPxRecordV6>> = match options.proxy_v6_path {
-            Some(p) => Box::new(stream_px_file_v6(p, options.features)?),
+            Some(p) => Box::new(stream_px_file_v6(
+                p,
+                options.features,
+                &mut isps,
+                prune_empty,
+            )?),
             None => Box::new(std::iter::empty()),
         };
 
@@ -138,6 +160,7 @@ pub fn compile(options: CompilerOptions<'_>) -> Result<CompilationStats, Compile
         writer.ingest_all_v6(merger_v6);
     }
 
+    writer.set_pools(cities, regions, isps);
     let stats = writer.write_to_file(options.output_path, options.write_gz, options.write_zst)?;
     Ok(stats)
 }

@@ -2,48 +2,53 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+use crate::compiler::writer::StringPool;
 use crate::models::{FeatureMask, GeoFlags};
 
-/// Raw parsed record from an IP2Location GeoIP CSV dataset (IPv4).
-#[derive(Clone, Debug, PartialEq)]
+/// Raw parsed record from an IP2Location CSV dataset (IPv4).
+/// Completely stack-allocated, Copy, 20 bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RawGeoRecord {
     pub ip_from: u32,
     pub ip_to: u32,
+    pub city_idx: u32,
+    pub reg_idx: u16,
     pub country: [u8; 2],
-    pub region: String,
-    pub city: String,
-    pub lat_fixed: i16,
-    pub lon_fixed: i16,
-}
-
-/// Raw parsed record from an IP2Location GeoIP CSV dataset (IPv6).
-#[derive(Clone, Debug, PartialEq)]
-pub struct RawGeoRecordV6 {
-    pub ip_from: u128,
-    pub ip_to: u128,
-    pub country: [u8; 2],
-    pub region: String,
-    pub city: String,
     pub lat_fixed: i16,
     pub lon_fixed: i16,
 }
 
 /// Raw parsed record from an IP2Proxy Threat CSV dataset (IPv4).
-#[derive(Clone, Debug, PartialEq)]
+/// Completely stack-allocated, Copy, 16 bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RawPxRecord {
     pub ip_from: u32,
     pub ip_to: u32,
-    pub isp: String,
+    pub isp_idx: u16,
     pub asn: u32,
     pub flags: u16,
 }
 
+/// Raw parsed record from an IP2Location CSV dataset (IPv6).
+/// Completely stack-allocated, Copy, 44 bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RawGeoRecordV6 {
+    pub ip_from: u128,
+    pub ip_to: u128,
+    pub city_idx: u32,
+    pub reg_idx: u16,
+    pub country: [u8; 2],
+    pub lat_fixed: i16,
+    pub lon_fixed: i16,
+}
+
 /// Raw parsed record from an IP2Proxy Threat CSV dataset (IPv6).
-#[derive(Clone, Debug, PartialEq)]
+/// Completely stack-allocated, Copy, 40 bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RawPxRecordV6 {
     pub ip_from: u128,
     pub ip_to: u128,
-    pub isp: String,
+    pub isp_idx: u16,
     pub asn: u32,
     pub flags: u16,
 }
@@ -107,6 +112,7 @@ pub fn parse_px_flags(proxy_type: &str, usage_str: &str, threat_str: &str) -> u1
     flags
 }
 
+#[inline]
 pub fn safe_parse_latlon(val: &str) -> i16 {
     let trimmed = val.trim().trim_matches('"');
     if let Ok(f) = trimmed.parse::<f64>() {
@@ -118,6 +124,7 @@ pub fn safe_parse_latlon(val: &str) -> i16 {
     0
 }
 
+#[inline]
 pub fn safe_parse_asn(val: &str) -> u32 {
     let trimmed = val.trim().trim_matches('"');
     let s = if trimmed.starts_with("AS") || trimmed.starts_with("as") {
@@ -128,26 +135,28 @@ pub fn safe_parse_asn(val: &str) -> u32 {
     s.parse::<u32>().unwrap_or(0)
 }
 
-/// Parses a CSV row splitting by comma, respecting quotes.
-pub fn parse_csv_line(line: &str) -> Vec<&str> {
-    let mut fields = Vec::with_capacity(16);
+/// Zero-heap-allocation CSV row splitter operating on a fixed stack-allocated slice buffer.
+#[inline(always)]
+pub fn parse_csv_row_fixed<'a, const N: usize>(line: &'a str, out: &mut [&'a str; N]) -> usize {
     let bytes = line.as_bytes();
     let mut start = 0;
     let mut in_quotes = false;
     let mut i = 0;
+    let mut count = 0;
 
     while i < bytes.len() {
         match bytes[i] {
-            b'"' => {
-                in_quotes = !in_quotes;
-            }
+            b'"' => in_quotes = !in_quotes,
             b',' if !in_quotes => {
-                let slice = line[start..i].trim();
-                let unquoted = slice
-                    .strip_prefix('"')
-                    .and_then(|s| s.strip_suffix('"'))
-                    .unwrap_or(slice);
-                fields.push(unquoted);
+                if count < N {
+                    let slice = line[start..i].trim();
+                    let unquoted = slice
+                        .strip_prefix('"')
+                        .and_then(|s| s.strip_suffix('"'))
+                        .unwrap_or(slice);
+                    out[count] = unquoted;
+                    count += 1;
+                }
                 start = i + 1;
             }
             _ => {}
@@ -155,274 +164,451 @@ pub fn parse_csv_line(line: &str) -> Vec<&str> {
         i += 1;
     }
 
-    if start <= bytes.len() {
+    if start <= bytes.len() && count < N {
         let slice = line[start..].trim();
         let unquoted = slice
             .strip_prefix('"')
             .and_then(|s| s.strip_suffix('"'))
             .unwrap_or(slice);
-        fields.push(unquoted);
+        out[count] = unquoted;
+        count += 1;
     }
 
-    fields
+    count
 }
 
-/// Reads IP2Location CSV lines as a streaming iterator.
-pub fn stream_geo_file<P: AsRef<Path>>(
-    path: P,
-    features: FeatureMask,
-) -> Result<impl Iterator<Item = RawGeoRecord>, std::io::Error> {
-    let file = File::open(path)?;
-    let reader = BufReader::with_capacity(256 * 1024, file);
+/// High-throughput zero-allocation GeoIP CSV streaming iterator (IPv4).
+pub struct GeoRecordIter<'a, R> {
+    reader: R,
+    line_buf: String,
+    has_country: bool,
+    has_region: bool,
+    has_city: bool,
+    has_coords: bool,
+    cities: &'a mut StringPool,
+    regions: &'a mut StringPool,
+    prune_empty: bool,
+}
 
-    let has_country = features.has_country();
-    let has_region = features.has_region();
-    let has_city = features.has_city();
-    let has_coords = features.has_coords();
+impl<'a, R: BufRead> Iterator for GeoRecordIter<'a, R> {
+    type Item = RawGeoRecord;
 
-    Ok(reader.lines().filter_map(move |line_res| {
-        let line = line_res.ok()?;
-        if line.is_empty() {
-            return None;
-        }
-        let fields = parse_csv_line(&line);
-        if fields.len() < 2 {
-            return None;
-        }
-
-        let ip_from = fields[0].parse::<u32>().ok()?;
-        let ip_to = fields[1].parse::<u32>().ok()?;
-
-        let mut country = *b"--";
-        if has_country && fields.len() > 2 {
-            let cc = fields[2].as_bytes();
-            if cc.len() >= 2 {
-                country = [cc[0], cc[1]];
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            self.line_buf.clear();
+            let bytes_read = self.reader.read_line(&mut self.line_buf).ok()?;
+            if bytes_read == 0 {
+                return None;
             }
-        }
-
-        let region = if has_region && fields.len() > 4 {
-            fields[4].to_string()
-        } else {
-            String::new()
-        };
-
-        let city = if has_city && fields.len() > 5 {
-            fields[5].to_string()
-        } else {
-            String::new()
-        };
-
-        let (lat_fixed, lon_fixed) = if has_coords && fields.len() > 7 {
-            (safe_parse_latlon(fields[6]), safe_parse_latlon(fields[7]))
-        } else {
-            (0, 0)
-        };
-
-        Some(RawGeoRecord {
-            ip_from,
-            ip_to,
-            country,
-            region,
-            city,
-            lat_fixed,
-            lon_fixed,
-        })
-    }))
-}
-
-/// Reads IP2Proxy CSV lines as a streaming iterator.
-pub fn stream_px_file<P: AsRef<Path>>(
-    path: P,
-    features: FeatureMask,
-) -> Result<impl Iterator<Item = RawPxRecord>, std::io::Error> {
-    let file = File::open(path)?;
-    let reader = BufReader::with_capacity(256 * 1024, file);
-
-    let has_isp = features.has_isp();
-    let has_asn = features.has_asn();
-    let has_threats = features.has_threats();
-
-    Ok(reader.lines().filter_map(move |line_res| {
-        let line = line_res.ok()?;
-        if line.is_empty() {
-            return None;
-        }
-        let fields = parse_csv_line(&line);
-        if fields.len() < 2 {
-            return None;
-        }
-
-        let ip_from = fields[0].parse::<u32>().ok()?;
-        let ip_to = fields[1].parse::<u32>().ok()?;
-
-        let isp = if has_isp && fields.len() > 7 {
-            fields[7].to_string()
-        } else {
-            String::new()
-        };
-
-        let asn = if has_asn && fields.len() > 10 {
-            safe_parse_asn(fields[10])
-        } else {
-            0
-        };
-
-        let flags = if has_threats {
-            let ptype = if fields.len() > 2 { fields[2] } else { "" };
-            let usage = if fields.len() > 9 { fields[9] } else { "" };
-            let threat = if fields.len() > 13 {
-                fields[13]
-            } else if fields.len() > 8 {
-                fields
-                    .iter()
-                    .copied()
-                    .find(|&s| s.contains("SPAM") || s.contains("SCANNER") || s.contains("BOTNET"))
-                    .unwrap_or("")
-            } else {
-                ""
-            };
-            parse_px_flags(ptype, usage, threat)
-        } else {
-            0
-        };
-
-        Some(RawPxRecord {
-            ip_from,
-            ip_to,
-            isp,
-            asn,
-            flags,
-        })
-    }))
-}
-
-/// Reads IP2Location IPv6 CSV lines as a streaming iterator.
-pub fn stream_geo_file_v6<P: AsRef<Path>>(
-    path: P,
-    features: FeatureMask,
-) -> Result<impl Iterator<Item = RawGeoRecordV6>, std::io::Error> {
-    let file = File::open(path)?;
-    let reader = BufReader::with_capacity(256 * 1024, file);
-
-    let has_country = features.has_country();
-    let has_region = features.has_region();
-    let has_city = features.has_city();
-    let has_coords = features.has_coords();
-
-    Ok(reader.lines().filter_map(move |line_res| {
-        let line = line_res.ok()?;
-        if line.is_empty() {
-            return None;
-        }
-        let fields = parse_csv_line(&line);
-        if fields.len() < 2 {
-            return None;
-        }
-
-        let ip_from = fields[0].parse::<u128>().ok()?;
-        let ip_to = fields[1].parse::<u128>().ok()?;
-
-        let mut country = *b"--";
-        if has_country && fields.len() > 2 {
-            let cc = fields[2].as_bytes();
-            if cc.len() >= 2 {
-                country = [cc[0], cc[1]];
+            let line = self.line_buf.trim();
+            if line.is_empty() {
+                continue;
             }
+
+            let mut fields = [""; 16];
+            let count = parse_csv_row_fixed(line, &mut fields);
+            if count < 2 {
+                continue;
+            }
+
+            let ip_from = match fields[0].parse::<u32>() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let ip_to = match fields[1].parse::<u32>() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            let mut country = *b"--";
+            if self.has_country && count > 2 {
+                let cc = fields[2].as_bytes();
+                if cc.len() >= 2 {
+                    country = [cc[0], cc[1]];
+                }
+            }
+
+            let reg_idx = if self.has_region && count > 4 {
+                let raw = self.regions.get_or_insert(fields[4], self.prune_empty);
+                if raw <= u16::MAX as u32 {
+                    raw as u16
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+
+            let city_idx = if self.has_city && count > 5 {
+                self.cities.get_or_insert(fields[5], self.prune_empty)
+            } else {
+                0
+            };
+
+            let (lat_fixed, lon_fixed) = if self.has_coords && count > 7 {
+                (safe_parse_latlon(fields[6]), safe_parse_latlon(fields[7]))
+            } else {
+                (0, 0)
+            };
+
+            return Some(RawGeoRecord {
+                ip_from,
+                ip_to,
+                city_idx,
+                reg_idx,
+                country,
+                lat_fixed,
+                lon_fixed,
+            });
         }
-
-        let region = if has_region && fields.len() > 4 {
-            fields[4].to_string()
-        } else {
-            String::new()
-        };
-
-        let city = if has_city && fields.len() > 5 {
-            fields[5].to_string()
-        } else {
-            String::new()
-        };
-
-        let (lat_fixed, lon_fixed) = if has_coords && fields.len() > 7 {
-            (safe_parse_latlon(fields[6]), safe_parse_latlon(fields[7]))
-        } else {
-            (0, 0)
-        };
-
-        Some(RawGeoRecordV6 {
-            ip_from,
-            ip_to,
-            country,
-            region,
-            city,
-            lat_fixed,
-            lon_fixed,
-        })
-    }))
+    }
 }
 
-/// Reads IP2Proxy IPv6 CSV lines as a streaming iterator.
-pub fn stream_px_file_v6<P: AsRef<Path>>(
+/// High-throughput zero-allocation Proxy/Threat CSV streaming iterator (IPv4).
+pub struct PxRecordIter<'a, R> {
+    reader: R,
+    line_buf: String,
+    has_isp: bool,
+    has_asn: bool,
+    has_threats: bool,
+    isps: &'a mut StringPool,
+    prune_empty: bool,
+}
+
+impl<'a, R: BufRead> Iterator for PxRecordIter<'a, R> {
+    type Item = RawPxRecord;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            self.line_buf.clear();
+            let bytes_read = self.reader.read_line(&mut self.line_buf).ok()?;
+            if bytes_read == 0 {
+                return None;
+            }
+            let line = self.line_buf.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            let mut fields = [""; 16];
+            let count = parse_csv_row_fixed(line, &mut fields);
+            if count < 2 {
+                continue;
+            }
+
+            let ip_from = match fields[0].parse::<u32>() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let ip_to = match fields[1].parse::<u32>() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            let isp_idx = if self.has_isp && count > 7 {
+                let raw = self.isps.get_or_insert(fields[7], self.prune_empty);
+                if raw <= u16::MAX as u32 {
+                    raw as u16
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+
+            let asn = if self.has_asn && count > 10 {
+                safe_parse_asn(fields[10])
+            } else {
+                0
+            };
+
+            let flags = if self.has_threats {
+                let ptype = if count > 2 { fields[2] } else { "" };
+                let usage = if count > 9 { fields[9] } else { "" };
+                let threat = if count > 13 {
+                    fields[13]
+                } else if count > 8 {
+                    fields[..count]
+                        .iter()
+                        .copied()
+                        .find(|&s| {
+                            s.contains("SPAM") || s.contains("SCANNER") || s.contains("BOTNET")
+                        })
+                        .unwrap_or("")
+                } else {
+                    ""
+                };
+                parse_px_flags(ptype, usage, threat)
+            } else {
+                0
+            };
+
+            return Some(RawPxRecord {
+                ip_from,
+                ip_to,
+                isp_idx,
+                asn,
+                flags,
+            });
+        }
+    }
+}
+
+/// High-throughput zero-allocation GeoIP CSV streaming iterator (IPv6).
+pub struct GeoRecordV6Iter<'a, R> {
+    reader: R,
+    line_buf: String,
+    has_country: bool,
+    has_region: bool,
+    has_city: bool,
+    has_coords: bool,
+    cities: &'a mut StringPool,
+    regions: &'a mut StringPool,
+    prune_empty: bool,
+}
+
+impl<'a, R: BufRead> Iterator for GeoRecordV6Iter<'a, R> {
+    type Item = RawGeoRecordV6;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            self.line_buf.clear();
+            let bytes_read = self.reader.read_line(&mut self.line_buf).ok()?;
+            if bytes_read == 0 {
+                return None;
+            }
+            let line = self.line_buf.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            let mut fields = [""; 16];
+            let count = parse_csv_row_fixed(line, &mut fields);
+            if count < 2 {
+                continue;
+            }
+
+            let ip_from = match fields[0].parse::<u128>() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let ip_to = match fields[1].parse::<u128>() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            let mut country = *b"--";
+            if self.has_country && count > 2 {
+                let cc = fields[2].as_bytes();
+                if cc.len() >= 2 {
+                    country = [cc[0], cc[1]];
+                }
+            }
+
+            let reg_idx = if self.has_region && count > 4 {
+                let raw = self.regions.get_or_insert(fields[4], self.prune_empty);
+                if raw <= u16::MAX as u32 {
+                    raw as u16
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+
+            let city_idx = if self.has_city && count > 5 {
+                self.cities.get_or_insert(fields[5], self.prune_empty)
+            } else {
+                0
+            };
+
+            let (lat_fixed, lon_fixed) = if self.has_coords && count > 7 {
+                (safe_parse_latlon(fields[6]), safe_parse_latlon(fields[7]))
+            } else {
+                (0, 0)
+            };
+
+            return Some(RawGeoRecordV6 {
+                ip_from,
+                ip_to,
+                city_idx,
+                reg_idx,
+                country,
+                lat_fixed,
+                lon_fixed,
+            });
+        }
+    }
+}
+
+/// High-throughput zero-allocation Proxy/Threat CSV streaming iterator (IPv6).
+pub struct PxRecordV6Iter<'a, R> {
+    reader: R,
+    line_buf: String,
+    has_isp: bool,
+    has_asn: bool,
+    has_threats: bool,
+    isps: &'a mut StringPool,
+    prune_empty: bool,
+}
+
+impl<'a, R: BufRead> Iterator for PxRecordV6Iter<'a, R> {
+    type Item = RawPxRecordV6;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            self.line_buf.clear();
+            let bytes_read = self.reader.read_line(&mut self.line_buf).ok()?;
+            if bytes_read == 0 {
+                return None;
+            }
+            let line = self.line_buf.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            let mut fields = [""; 16];
+            let count = parse_csv_row_fixed(line, &mut fields);
+            if count < 2 {
+                continue;
+            }
+
+            let ip_from = match fields[0].parse::<u128>() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let ip_to = match fields[1].parse::<u128>() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            let isp_idx = if self.has_isp && count > 7 {
+                let raw = self.isps.get_or_insert(fields[7], self.prune_empty);
+                if raw <= u16::MAX as u32 {
+                    raw as u16
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+
+            let asn = if self.has_asn && count > 10 {
+                safe_parse_asn(fields[10])
+            } else {
+                0
+            };
+
+            let flags = if self.has_threats {
+                let ptype = if count > 2 { fields[2] } else { "" };
+                let usage = if count > 9 { fields[9] } else { "" };
+                let threat = if count > 13 {
+                    fields[13]
+                } else if count > 8 {
+                    fields[..count]
+                        .iter()
+                        .copied()
+                        .find(|&s| {
+                            s.contains("SPAM") || s.contains("SCANNER") || s.contains("BOTNET")
+                        })
+                        .unwrap_or("")
+                } else {
+                    ""
+                };
+                parse_px_flags(ptype, usage, threat)
+            } else {
+                0
+            };
+
+            return Some(RawPxRecordV6 {
+                ip_from,
+                ip_to,
+                isp_idx,
+                asn,
+                flags,
+            });
+        }
+    }
+}
+
+pub fn stream_geo_file<'a, P: AsRef<Path>>(
     path: P,
     features: FeatureMask,
-) -> Result<impl Iterator<Item = RawPxRecordV6>, std::io::Error> {
+    cities: &'a mut StringPool,
+    regions: &'a mut StringPool,
+    prune_empty: bool,
+) -> Result<GeoRecordIter<'a, BufReader<File>>, std::io::Error> {
     let file = File::open(path)?;
-    let reader = BufReader::with_capacity(256 * 1024, file);
+    let reader = BufReader::with_capacity(512 * 1024, file);
+    Ok(GeoRecordIter {
+        reader,
+        line_buf: String::with_capacity(512),
+        has_country: features.has_country(),
+        has_region: features.has_region(),
+        has_city: features.has_city(),
+        has_coords: features.has_coords(),
+        cities,
+        regions,
+        prune_empty,
+    })
+}
 
-    let has_isp = features.has_isp();
-    let has_asn = features.has_asn();
-    let has_threats = features.has_threats();
+pub fn stream_px_file<'a, P: AsRef<Path>>(
+    path: P,
+    features: FeatureMask,
+    isps: &'a mut StringPool,
+    prune_empty: bool,
+) -> Result<PxRecordIter<'a, BufReader<File>>, std::io::Error> {
+    let file = File::open(path)?;
+    let reader = BufReader::with_capacity(512 * 1024, file);
+    Ok(PxRecordIter {
+        reader,
+        line_buf: String::with_capacity(512),
+        has_isp: features.has_isp(),
+        has_asn: features.has_asn(),
+        has_threats: features.has_threats(),
+        isps,
+        prune_empty,
+    })
+}
 
-    Ok(reader.lines().filter_map(move |line_res| {
-        let line = line_res.ok()?;
-        if line.is_empty() {
-            return None;
-        }
-        let fields = parse_csv_line(&line);
-        if fields.len() < 2 {
-            return None;
-        }
+pub fn stream_geo_file_v6<'a, P: AsRef<Path>>(
+    path: P,
+    features: FeatureMask,
+    cities: &'a mut StringPool,
+    regions: &'a mut StringPool,
+    prune_empty: bool,
+) -> Result<GeoRecordV6Iter<'a, BufReader<File>>, std::io::Error> {
+    let file = File::open(path)?;
+    let reader = BufReader::with_capacity(512 * 1024, file);
+    Ok(GeoRecordV6Iter {
+        reader,
+        line_buf: String::with_capacity(512),
+        has_country: features.has_country(),
+        has_region: features.has_region(),
+        has_city: features.has_city(),
+        has_coords: features.has_coords(),
+        cities,
+        regions,
+        prune_empty,
+    })
+}
 
-        let ip_from = fields[0].parse::<u128>().ok()?;
-        let ip_to = fields[1].parse::<u128>().ok()?;
-
-        let isp = if has_isp && fields.len() > 7 {
-            fields[7].to_string()
-        } else {
-            String::new()
-        };
-
-        let asn = if has_asn && fields.len() > 10 {
-            safe_parse_asn(fields[10])
-        } else {
-            0
-        };
-
-        let flags = if has_threats {
-            let ptype = if fields.len() > 2 { fields[2] } else { "" };
-            let usage = if fields.len() > 9 { fields[9] } else { "" };
-            let threat = if fields.len() > 13 {
-                fields[13]
-            } else if fields.len() > 8 {
-                fields
-                    .iter()
-                    .copied()
-                    .find(|&s| s.contains("SPAM") || s.contains("SCANNER") || s.contains("BOTNET"))
-                    .unwrap_or("")
-            } else {
-                ""
-            };
-            parse_px_flags(ptype, usage, threat)
-        } else {
-            0
-        };
-
-        Some(RawPxRecordV6 {
-            ip_from,
-            ip_to,
-            isp,
-            asn,
-            flags,
-        })
-    }))
+pub fn stream_px_file_v6<'a, P: AsRef<Path>>(
+    path: P,
+    features: FeatureMask,
+    isps: &'a mut StringPool,
+    prune_empty: bool,
+) -> Result<PxRecordV6Iter<'a, BufReader<File>>, std::io::Error> {
+    let file = File::open(path)?;
+    let reader = BufReader::with_capacity(512 * 1024, file);
+    Ok(PxRecordV6Iter {
+        reader,
+        line_buf: String::with_capacity(512),
+        has_isp: features.has_isp(),
+        has_asn: features.has_asn(),
+        has_threats: features.has_threats(),
+        isps,
+        prune_empty,
+    })
 }

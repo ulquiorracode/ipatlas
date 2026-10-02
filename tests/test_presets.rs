@@ -132,7 +132,7 @@ fn test_compact_v4_1_layout() {
 #[test]
 fn test_compact_v4_1_wide_range_split_and_profile_overflow_fallback() {
     use ipatlas::compiler::sweep::MergedEntry;
-    use ipatlas::compiler::DatabaseWriter;
+    use ipatlas::compiler::{DatabaseWriter, StringPool};
 
     // 1. Test wide interval split (> 65535 IPs)
     let opt = OptimizationConfig {
@@ -141,14 +141,18 @@ fn test_compact_v4_1_wide_range_split_and_profile_overflow_fallback() {
     };
     let mut writer = DatabaseWriter::new(opt.clone());
 
+    let mut cities = StringPool::new();
+    let city_idx = cities.get_or_insert("Munich", false);
+    writer.set_pools(cities, StringPool::new(), StringPool::new());
+
     // Single interval covering 200,000 IPs: 10.0.0.0 to 10.3.13.63
     let entries = vec![MergedEntry {
         ip_from: 167772160,
         ip_to: 167772160 + 200_000,
         country: *b"DE",
-        region: "Bavaria".to_string(),
-        city: "Munich".to_string(),
-        isp: "Telekom".to_string(),
+        reg_idx: 0,
+        city_idx,
+        isp_idx: 0,
         asn: 3320,
         flags: 0,
         lat_fixed: 4813,
@@ -181,9 +185,9 @@ fn test_compact_v4_1_wide_range_split_and_profile_overflow_fallback() {
         ip_from: i * 4,
         ip_to: i * 4 + 3,
         country: *b"FR",
-        region: format!("Reg{}", i),
-        city: format!("City{}", i),
-        isp: format!("ISP{}", i),
+        reg_idx: 0,
+        city_idx: i,
+        isp_idx: 0,
         asn: i,
         flags: 0,
         lat_fixed: 0,
