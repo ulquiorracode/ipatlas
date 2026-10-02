@@ -1,26 +1,107 @@
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-/// Bitmask representation of threat classifications and ISP usage types.
+/// Bitmask representation of threat classifications and ISP usage types (16-bit packed).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct GeoFlags(pub u16);
 
 impl GeoFlags {
-    pub const DATACENTER: u16 = 0x0001; // Datacenter / Web Hosting (VPN / Proxy / Bot origin)
-    pub const RESIDENTIAL: u16 = 0x0002; // Fixed Residential ISP
-    pub const MOBILE: u16 = 0x0004; // Mobile Carrier
-    pub const COMMERCIAL: u16 = 0x0008; // Commercial Enterprise
-    pub const ORGANIZATION: u16 = 0x0010; // Organization
-    pub const GOVERNMENT: u16 = 0x0020; // Government / Military
-    pub const EDUCATION: u16 = 0x0040; // University / School / Library
-    pub const CDN: u16 = 0x0080; // Content Delivery Network
-    pub const SPAM: u16 = 0x0100; // Spam Source
-    pub const SCANNER: u16 = 0x0200; // Port / Vulnerability Scanner
-    pub const BOTNET: u16 = 0x0400; // DDoS / Botnet Node
-    pub const PROXY: u16 = 0x0800; // Proxy / VPN Anonymizer
+    // === 9 Official Proxy Types from IP2Proxy Specification ===
+    pub const VPN: u16 = 1 << 0; // VPN Anonymizer
+    pub const TOR: u16 = 1 << 1; // Tor Exit Node
+    pub const DCH: u16 = 1 << 2; // Datacenter / Hosting / Cloud
+    pub const PUB: u16 = 1 << 3; // Public HTTP/SOCKS Proxy
+    pub const WEB: u16 = 1 << 4; // Web-based Proxy
+    pub const SES: u16 = 1 << 5; // Search Engine Spider / Crawler
+    pub const RES: u16 = 1 << 6; // Residential Proxy
+    pub const CPN: u16 = 1 << 7; // Consumer Privacy Network (e.g. Apple Private Relay)
+    pub const EPN: u16 = 1 << 8; // Enterprise Private Network
+
+    // === Threat Intelligence & Usage Types ===
+    pub const SPAM: u16 = 1 << 9; // Known Spam Source
+    pub const SCANNER: u16 = 1 << 10; // Port / Vulnerability Scanner
+    pub const BOTNET: u16 = 1 << 11; // DDoS / Botnet / Malware Node
+    pub const MOBILE: u16 = 1 << 12; // Mobile Carrier / Cellular (MOB)
+    pub const CDN: u16 = 1 << 13; // Content Delivery Network (CDN)
+    pub const RESIDENTIAL: u16 = 1 << 14; // Fixed Residential ISP
+    pub const ANY_PROXY: u16 = 1 << 15; // Generic Anonymizer / Proxy indicator
+
+    // Backward-compatibility aliases
+    pub const DATACENTER: u16 = Self::DCH;
+    pub const PROXY: u16 = Self::ANY_PROXY;
+
+    #[inline(always)]
+    pub fn is_vpn(&self) -> bool {
+        (self.0 & Self::VPN) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_tor(&self) -> bool {
+        (self.0 & Self::TOR) != 0
+    }
 
     #[inline(always)]
     pub fn is_datacenter(&self) -> bool {
-        (self.0 & Self::DATACENTER) != 0
+        (self.0 & Self::DCH) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_public_proxy(&self) -> bool {
+        (self.0 & Self::PUB) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_pub(&self) -> bool {
+        self.is_public_proxy()
+    }
+
+    #[inline(always)]
+    pub fn is_web_proxy(&self) -> bool {
+        (self.0 & Self::WEB) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_web(&self) -> bool {
+        self.is_web_proxy()
+    }
+
+    #[inline(always)]
+    pub fn is_search_spider(&self) -> bool {
+        (self.0 & Self::SES) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_ses(&self) -> bool {
+        self.is_search_spider()
+    }
+
+    #[inline(always)]
+    pub fn is_residential_proxy(&self) -> bool {
+        (self.0 & Self::RES) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_res(&self) -> bool {
+        self.is_residential_proxy()
+    }
+
+    #[inline(always)]
+    pub fn is_consumer_privacy_network(&self) -> bool {
+        (self.0 & Self::CPN) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_cpn(&self) -> bool {
+        self.is_consumer_privacy_network()
+    }
+
+    #[inline(always)]
+    pub fn is_enterprise_private_network(&self) -> bool {
+        (self.0 & Self::EPN) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_epn(&self) -> bool {
+        self.is_enterprise_private_network()
     }
 
     #[inline(always)]
@@ -31,26 +112,6 @@ impl GeoFlags {
     #[inline(always)]
     pub fn is_mobile(&self) -> bool {
         (self.0 & Self::MOBILE) != 0
-    }
-
-    #[inline(always)]
-    pub fn is_commercial(&self) -> bool {
-        (self.0 & Self::COMMERCIAL) != 0
-    }
-
-    #[inline(always)]
-    pub fn is_organization(&self) -> bool {
-        (self.0 & Self::ORGANIZATION) != 0
-    }
-
-    #[inline(always)]
-    pub fn is_government(&self) -> bool {
-        (self.0 & Self::GOVERNMENT) != 0
-    }
-
-    #[inline(always)]
-    pub fn is_education(&self) -> bool {
-        (self.0 & Self::EDUCATION) != 0
     }
 
     #[inline(always)]
@@ -75,16 +136,72 @@ impl GeoFlags {
 
     #[inline(always)]
     pub fn is_proxy(&self) -> bool {
-        (self.0 & Self::PROXY) != 0
+        (self.0
+            & (Self::ANY_PROXY
+                | Self::VPN
+                | Self::TOR
+                | Self::PUB
+                | Self::WEB
+                | Self::RES
+                | Self::CPN
+                | Self::EPN))
+            != 0
+    }
+
+    /// Converts legacy Generation V4 packed flags to Generation V5 layout.
+    ///
+    /// Legacy V4 bitmask:
+    /// - `0x0001`: DATACENTER
+    /// - `0x0002`: RESIDENTIAL
+    /// - `0x0004`: MOBILE
+    /// - `0x0008`: COMMERCIAL
+    /// - `0x0010`: ORGANIZATION
+    /// - `0x0020`: GOVERNMENT
+    /// - `0x0040`: EDUCATION
+    /// - `0x0080`: CDN
+    /// - `0x0100`: SPAM
+    /// - `0x0200`: SCANNER
+    /// - `0x0400`: BOTNET
+    /// - `0x0800`: PROXY
+    #[inline]
+    pub fn from_v4(raw_v4: u16) -> Self {
+        let mut v5 = 0u16;
+        if (raw_v4 & 0x0001) != 0 {
+            v5 |= Self::DCH;
+        }
+        if (raw_v4 & 0x0002) != 0 {
+            v5 |= Self::RESIDENTIAL;
+        }
+        if (raw_v4 & 0x0004) != 0 {
+            v5 |= Self::MOBILE;
+        }
+        // Legacy 0x0008, 0x0010, 0x0020, 0x0040 were generic enterprise tags
+        if (raw_v4 & 0x0080) != 0 {
+            v5 |= Self::CDN;
+        }
+        if (raw_v4 & 0x0100) != 0 {
+            v5 |= Self::SPAM;
+        }
+        if (raw_v4 & 0x0200) != 0 {
+            v5 |= Self::SCANNER;
+        }
+        if (raw_v4 & 0x0400) != 0 {
+            v5 |= Self::BOTNET;
+        }
+        if (raw_v4 & 0x0800) != 0 {
+            v5 |= Self::ANY_PROXY | Self::VPN;
+        }
+        GeoFlags(v5)
     }
 }
 
 /// Zero-copy borrowed view of a resolved IP lookup directly from mmap slices.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GeoRecordRef<'a> {
-    pub ip: Ipv4Addr,
-    pub ip_from: u32,
-    pub ip_to: u32,
+    pub ip: IpAddr,
+    pub ip_from: u128,
+    pub ip_to: u128,
+    pub is_v6: bool,
     pub country: &'a str,
     pub region: &'a str,
     pub city: &'a str,
@@ -97,11 +214,19 @@ pub struct GeoRecordRef<'a> {
 
 impl<'a> GeoRecordRef<'a> {
     pub fn range_str(&self) -> String {
-        format!(
-            "{} - {}",
-            Ipv4Addr::from(self.ip_from),
-            Ipv4Addr::from(self.ip_to)
-        )
+        if self.is_v6 {
+            format!(
+                "{} - {}",
+                Ipv6Addr::from(self.ip_from),
+                Ipv6Addr::from(self.ip_to)
+            )
+        } else {
+            format!(
+                "{} - {}",
+                Ipv4Addr::from(self.ip_from as u32),
+                Ipv4Addr::from(self.ip_to as u32)
+            )
+        }
     }
 
     pub fn to_owned(&self) -> GeoRecord {
@@ -109,6 +234,7 @@ impl<'a> GeoRecordRef<'a> {
             ip: self.ip,
             ip_from: self.ip_from,
             ip_to: self.ip_to,
+            is_v6: self.is_v6,
             country: self.country.to_string(),
             region: self.region.to_string(),
             city: self.city.to_string(),
@@ -124,9 +250,10 @@ impl<'a> GeoRecordRef<'a> {
 /// Owned GeoIP & Threat record with allocated strings.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GeoRecord {
-    pub ip: Ipv4Addr,
-    pub ip_from: u32,
-    pub ip_to: u32,
+    pub ip: IpAddr,
+    pub ip_from: u128,
+    pub ip_to: u128,
+    pub is_v6: bool,
     pub country: String,
     pub region: String,
     pub city: String,
@@ -139,10 +266,18 @@ pub struct GeoRecord {
 
 impl GeoRecord {
     pub fn range_str(&self) -> String {
-        format!(
-            "{} - {}",
-            Ipv4Addr::from(self.ip_from),
-            Ipv4Addr::from(self.ip_to)
-        )
+        if self.is_v6 {
+            format!(
+                "{} - {}",
+                Ipv6Addr::from(self.ip_from),
+                Ipv6Addr::from(self.ip_to)
+            )
+        } else {
+            format!(
+                "{} - {}",
+                Ipv4Addr::from(self.ip_from as u32),
+                Ipv4Addr::from(self.ip_to as u32)
+            )
+        }
     }
 }

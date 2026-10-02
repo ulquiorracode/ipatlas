@@ -55,3 +55,28 @@ impl RangeV4Compact {
         ip >= self.ip_from && ip <= self.ip_to()
     }
 }
+
+/// 36-byte IPv6 range interval mapping an IPv6 128-bit address range to a 32-bit profile ID.
+#[repr(C, packed)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, FromBytes, IntoBytes, KnownLayout, Immutable)]
+pub struct RangeV6 {
+    pub ip_from: u128,
+    pub ip_to: u128,
+    pub profile_id: u32,
+}
+
+impl RangeV6 {
+    #[inline(always)]
+    pub const fn new(ip_from: u128, ip_to: u128, profile_id: u32) -> Self {
+        Self {
+            ip_from,
+            ip_to,
+            profile_id,
+        }
+    }
+
+    #[inline(always)]
+    pub fn contains(&self, ip: u128) -> bool {
+        ip >= self.ip_from && ip <= self.ip_to
+    }
+}

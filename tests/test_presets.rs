@@ -112,7 +112,7 @@ fn test_compact_v4_1_layout() {
 
     let reader = IpAtlasReader::open(&out_bin).unwrap();
     assert!(reader.is_compact());
-    assert_eq!(reader.version(), 0x0401);
+    assert_eq!(reader.version(), 0x0501);
     assert_eq!(reader.len(), 2);
     assert_eq!(reader.ranges_compact().len(), 2);
     assert_eq!(
@@ -132,7 +132,7 @@ fn test_compact_v4_1_layout() {
 #[test]
 fn test_compact_v4_1_wide_range_split_and_profile_overflow_fallback() {
     use ipatlas::compiler::sweep::MergedEntry;
-    use ipatlas::compiler::DatabaseWriter;
+    use ipatlas::compiler::{DatabaseWriter, StringPool};
 
     // 1. Test wide interval split (> 65535 IPs)
     let opt = OptimizationConfig {
@@ -141,14 +141,18 @@ fn test_compact_v4_1_wide_range_split_and_profile_overflow_fallback() {
     };
     let mut writer = DatabaseWriter::new(opt.clone());
 
+    let mut cities = StringPool::new();
+    let city_idx = cities.get_or_insert("Munich", false);
+    writer.set_pools(cities, StringPool::new(), StringPool::new());
+
     // Single interval covering 200,000 IPs: 10.0.0.0 to 10.3.13.63
     let entries = vec![MergedEntry {
         ip_from: 167772160,
         ip_to: 167772160 + 200_000,
         country: *b"DE",
-        region: "Bavaria".to_string(),
-        city: "Munich".to_string(),
-        isp: "Telekom".to_string(),
+        reg_idx: 0,
+        city_idx,
+        isp_idx: 0,
         asn: 3320,
         flags: 0,
         lat_fixed: 4813,
@@ -158,7 +162,7 @@ fn test_compact_v4_1_wide_range_split_and_profile_overflow_fallback() {
 
     let dir = tempfile::tempdir().unwrap();
     let out_bin = dir.path().join("split_test.bin");
-    let stats = writer.write_to_file(&out_bin, false, false).unwrap();
+    let stats = writer.write_to_file(&out_bin).unwrap();
     assert!(stats.is_compact);
     assert_eq!(stats.original_records, 1);
     // 200,000 / 65536 = 3 full chunks (65536 * 3 = 196608) + 1 remainder (3393) = 4 records
@@ -181,9 +185,9 @@ fn test_compact_v4_1_wide_range_split_and_profile_overflow_fallback() {
         ip_from: i * 4,
         ip_to: i * 4 + 3,
         country: *b"FR",
-        region: format!("Reg{}", i),
-        city: format!("City{}", i),
-        isp: format!("ISP{}", i),
+        reg_idx: 0,
+        city_idx: i,
+        isp_idx: 0,
         asn: i,
         flags: 0,
         lat_fixed: 0,
@@ -192,9 +196,7 @@ fn test_compact_v4_1_wide_range_split_and_profile_overflow_fallback() {
     writer_overflow.ingest_all(many_entries);
 
     let out_overflow = dir.path().join("overflow_test.bin");
-    let overflow_stats = writer_overflow
-        .write_to_file(&out_overflow, false, false)
-        .unwrap();
+    let overflow_stats = writer_overflow.write_to_file(&out_overflow).unwrap();
     assert!(
         !overflow_stats.is_compact,
         "Should fall back to Standard layout when profiles exceed u16::MAX"
@@ -206,7 +208,7 @@ fn test_compact_v4_1_wide_range_split_and_profile_overflow_fallback() {
 
     let reader_overflow = IpAtlasReader::open(&out_overflow).unwrap();
     assert!(!reader_overflow.is_compact());
-    assert_eq!(reader_overflow.version(), 4);
+    assert_eq!(reader_overflow.version(), 5);
 }
 
 #[test]

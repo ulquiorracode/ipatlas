@@ -90,27 +90,34 @@ The optimized binary will be located at `./target/release/ipatlas`.
 
 ### 1. Compile Datasets
 
-Compile raw CSVs into a binary database with automated `.bin.gz` and `.bin.zst` distributions:
+Compile raw IPv4 / IPv6 CSV datasets into high-performance zero-copy binary databases:
 
 ```sh
-# Unified Full (Standard 12B layout)
+# Dual-Stack Full Database (Generation V5, IPv4 + IPv6)
 ipatlas compile --mode full \
   --geo IP2LOCATION-LITE-DB5.CSV \
   --proxy IP2PROXY-LITE-PX10.CSV \
+  --geo-v6 IP2LOCATION-LITE-DB5.IPV6.CSV \
+  --proxy-v6 IP2PROXY-LITE-PX10.IPV6.CSV \
   -o ipatlas_full.bin
 
 # Fast Preset Compilation (Cascade Coalescing):
-# - firewall: Country + ASN + Threat flags (~7.9 MB binary, ~2.5 MB .zst)
+# - firewall: Country + ASN + Threat flags (~7.9 MB binary)
 ipatlas compile --preset firewall --geo DB5.CSV --proxy PX10.CSV -o ipatlas_firewall.bin
 
-# - country: Pure Geo-Blocking Country-Only (~5.6 MB binary, ~1.2 MB .zst, 233x reduction!)
+# - country: Pure Geo-Blocking Country-Only (~5.6 MB binary, 233x reduction!)
 ipatlas compile --preset country --geo DB5.CSV -o ipatlas_country.bin
 
 # - city: Country + Region + City + Coordinates without threats (~38 MB binary)
 ipatlas compile --preset city --geo DB5.CSV -o ipatlas_city.bin
 
-# V4.1 Compact Layout (8B records, maximum L1/L2 cache locality):
+# V5 Compact Layout (8B V4 records / 36B V6 records, maximum L1/L2 cache locality):
 ipatlas compile --preset firewall --layout compact --geo DB5.CSV --proxy PX10.CSV -o firewall_compact.bin
+
+# Distribution Compression (Unix-way):
+# Use native system utilities (zstd / pigz) to compress compiled binaries for distribution:
+zstd -19 --keep ipatlas_full.bin      # produces ipatlas_full.bin.zst
+pigz -k -9 ipatlas_full.bin           # produces ipatlas_full.bin.gz
 ```
 
 ### 2. Lookup an IP Address

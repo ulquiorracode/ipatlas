@@ -49,8 +49,6 @@ fn test_compile_and_lookup_full() {
     assert_eq!(stats.records, 5);
     assert_eq!(stats.profiles, 4);
     assert!(out_bin.exists());
-    assert!(dir.path().join("unified.bin.gz").exists());
-    assert!(dir.path().join("unified.bin.zst").exists());
 
     let reader = IpAtlasReader::open(&out_bin).unwrap();
     assert_eq!(reader.len(), 5);

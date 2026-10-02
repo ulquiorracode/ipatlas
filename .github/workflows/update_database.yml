@@ -66,7 +66,7 @@ jobs:
             exit 1
           fi
           
-          echo "1. Compiling Unified Full Database (V4 Profile Normalization)..."
+          echo "1. Compiling Unified Full Database (V5 Profile Normalization)..."
           ./target/release/ipatlas compile --mode full --geo "$DB5_FILE" --proxy "$PX10_FILE" --out dist/ipatlas_full.bin
           
           echo "2. Compiling Proxy-Only Database..."
@@ -74,6 +74,18 @@ jobs:
           
           echo "3. Compiling Geo-Only Database..."
           ./target/release/ipatlas compile --mode geo --geo "$DB5_FILE" --out dist/ipatlas_geo.bin
+
+      - name: Compress Distribution Binaries (Gzip & Zstandard)
+        run: |
+          sudo apt-get update && sudo apt-get install -y zstd pigz
+          cd dist
+          for f in *.bin; do
+            echo "Compressing $f with gzip..."
+            pigz -k -9 "$f"
+            echo "Compressing $f with zstd..."
+            zstd -19 --keep "$f"
+          done
+          ls -lh
 
       - name: Generate SHA256 Checksums
         run: |
