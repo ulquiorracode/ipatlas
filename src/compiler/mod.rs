@@ -5,8 +5,11 @@ pub mod writer;
 use std::path::Path;
 use thiserror::Error;
 
-use crate::compiler::parser::{stream_geo_file, stream_px_file, RawGeoRecord, RawPxRecord};
-use crate::compiler::sweep::SweepLineMerger;
+use crate::compiler::parser::{
+    stream_geo_file, stream_geo_file_v6, stream_px_file, stream_px_file_v6, RawGeoRecord,
+    RawGeoRecordV6, RawPxRecord, RawPxRecordV6,
+};
+use crate::compiler::sweep::{SweepLineMerger, SweepLineMergerV6};
 pub use crate::compiler::writer::{CompilationStats, DatabaseWriter, StringPool};
 use crate::models::{FeatureMask, OptimizationConfig, Preset};
 
@@ -24,6 +27,8 @@ pub enum CompilerError {
 pub struct CompilerOptions<'a> {
     pub geo_path: Option<&'a Path>,
     pub proxy_path: Option<&'a Path>,
+    pub geo_v6_path: Option<&'a Path>,
+    pub proxy_v6_path: Option<&'a Path>,
     pub output_path: &'a Path,
     pub features: FeatureMask,
     pub opt: OptimizationConfig,
@@ -36,6 +41,8 @@ impl<'a> CompilerOptions<'a> {
         Self {
             geo_path: None,
             proxy_path: None,
+            geo_v6_path: None,
+            proxy_v6_path: None,
             output_path,
             features: FeatureMask::default(),
             opt: OptimizationConfig::default(),
@@ -69,6 +76,16 @@ impl<'a> CompilerOptions<'a> {
         self
     }
 
+    pub fn geo_v6(mut self, path: Option<&'a Path>) -> Self {
+        self.geo_v6_path = path;
+        self
+    }
+
+    pub fn proxy_v6(mut self, path: Option<&'a Path>) -> Self {
+        self.proxy_v6_path = path;
+        self
+    }
+
     pub fn compression(mut self, write_gz: bool, write_zst: bool) -> Self {
         self.write_gz = write_gz;
         self.write_zst = write_zst;
@@ -76,26 +93,50 @@ impl<'a> CompilerOptions<'a> {
     }
 }
 
-/// Compiles GeoIP and Proxy CSV datasets into an IPAtlas binary database.
+/// Compiles GeoIP and Proxy CSV datasets into an IPAtlas Generation V5 binary database.
 pub fn compile(options: CompilerOptions<'_>) -> Result<CompilationStats, CompilerError> {
-    if options.geo_path.is_none() && options.proxy_path.is_none() {
+    let has_v4 = options.geo_path.is_some() || options.proxy_path.is_some();
+    let has_v6 = options.geo_v6_path.is_some() || options.proxy_v6_path.is_some();
+
+    if !has_v4 && !has_v6 {
         return Err(CompilerError::NoInputFiles);
     }
 
-    let geo_iter: Box<dyn Iterator<Item = RawGeoRecord>> = match options.geo_path {
-        Some(p) => Box::new(stream_geo_file(p, options.features)?),
-        None => Box::new(std::iter::empty()),
-    };
+    let mut writer = DatabaseWriter::new(options.opt.clone());
 
-    let px_iter: Box<dyn Iterator<Item = RawPxRecord>> = match options.proxy_path {
-        Some(p) => Box::new(stream_px_file(p, options.features)?),
-        None => Box::new(std::iter::empty()),
-    };
+    // 1. Process IPv4 streams if present
+    if has_v4 {
+        let geo_iter: Box<dyn Iterator<Item = RawGeoRecord>> = match options.geo_path {
+            Some(p) => Box::new(stream_geo_file(p, options.features)?),
+            None => Box::new(std::iter::empty()),
+        };
 
-    let merger = SweepLineMerger::new(geo_iter, px_iter, options.features, options.opt.clone());
+        let px_iter: Box<dyn Iterator<Item = RawPxRecord>> = match options.proxy_path {
+            Some(p) => Box::new(stream_px_file(p, options.features)?),
+            None => Box::new(std::iter::empty()),
+        };
 
-    let mut writer = DatabaseWriter::new(options.opt);
-    writer.ingest_all(merger);
+        let merger_v4 =
+            SweepLineMerger::new(geo_iter, px_iter, options.features, options.opt.clone());
+        writer.ingest_all(merger_v4);
+    }
+
+    // 2. Process IPv6 streams if present
+    if has_v6 {
+        let geo_v6_iter: Box<dyn Iterator<Item = RawGeoRecordV6>> = match options.geo_v6_path {
+            Some(p) => Box::new(stream_geo_file_v6(p, options.features)?),
+            None => Box::new(std::iter::empty()),
+        };
+
+        let px_v6_iter: Box<dyn Iterator<Item = RawPxRecordV6>> = match options.proxy_v6_path {
+            Some(p) => Box::new(stream_px_file_v6(p, options.features)?),
+            None => Box::new(std::iter::empty()),
+        };
+
+        let merger_v6 =
+            SweepLineMergerV6::new(geo_v6_iter, px_v6_iter, options.features, options.opt);
+        writer.ingest_all_v6(merger_v6);
+    }
 
     let stats = writer.write_to_file(options.output_path, options.write_gz, options.write_zst)?;
     Ok(stats)

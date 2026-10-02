@@ -271,3 +271,263 @@ where
         None
     }
 }
+
+/// Merged IPv6 interval entry containing unified metadata from Geo and Proxy datasets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergedEntryV6 {
+    pub ip_from: u128,
+    pub ip_to: u128,
+    pub country: [u8; 2],
+    pub region: String,
+    pub city: String,
+    pub isp: String,
+    pub asn: u32,
+    pub flags: u16,
+    pub lat_fixed: i16,
+    pub lon_fixed: i16,
+}
+
+impl MergedEntryV6 {
+    #[inline]
+    pub fn matches_attributes(&self, other: &Self) -> bool {
+        self.country == other.country
+            && self.asn == other.asn
+            && self.flags == other.flags
+            && self.lat_fixed == other.lat_fixed
+            && self.lon_fixed == other.lon_fixed
+            && self.region == other.region
+            && self.city == other.city
+            && self.isp == other.isp
+    }
+}
+
+/// 1D Sweep-Line Merger for IPv6 128-bit address ranges.
+pub struct SweepLineMergerV6<G, P> {
+    geo_iter: G,
+    px_iter: P,
+    cur_geo: Option<crate::compiler::parser::RawGeoRecordV6>,
+    cur_px: Option<crate::compiler::parser::RawPxRecordV6>,
+    pending_prev: Option<MergedEntryV6>,
+    features: FeatureMask,
+    opt: OptimizationConfig,
+    finished: bool,
+}
+
+impl<G, P> SweepLineMergerV6<G, P>
+where
+    G: Iterator<Item = crate::compiler::parser::RawGeoRecordV6>,
+    P: Iterator<Item = crate::compiler::parser::RawPxRecordV6>,
+{
+    pub fn new(
+        mut geo_iter: G,
+        mut px_iter: P,
+        features: FeatureMask,
+        opt: OptimizationConfig,
+    ) -> Self {
+        let cur_geo = geo_iter.next();
+        let cur_px = px_iter.next();
+        Self {
+            geo_iter,
+            px_iter,
+            cur_geo,
+            cur_px,
+            pending_prev: None,
+            features,
+            opt,
+            finished: false,
+        }
+    }
+
+    #[inline]
+    fn make_entry(
+        features: FeatureMask,
+        opt: &OptimizationConfig,
+        ip_from: u128,
+        ip_to: u128,
+        geo: Option<&crate::compiler::parser::RawGeoRecordV6>,
+        px: Option<&crate::compiler::parser::RawPxRecordV6>,
+    ) -> MergedEntryV6 {
+        let country = if features.has_country() {
+            geo.map(|g| g.country).unwrap_or(*b"--")
+        } else {
+            *b"--"
+        };
+
+        let mut region = if features.has_region() {
+            geo.map(|g| g.region.clone()).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let mut city = if features.has_city() {
+            geo.map(|g| g.city.clone()).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let mut isp = if features.has_isp() {
+            px.map(|p| p.isp.clone()).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        if opt.normalize_strings {
+            region = region.trim().to_string();
+            city = city.trim().to_string();
+            isp = isp.trim().to_string();
+        }
+
+        let asn = if features.has_asn() {
+            px.map(|p| p.asn).unwrap_or(0)
+        } else {
+            0
+        };
+
+        let mut flags = if features.has_threats() {
+            px.map(|p| p.flags).unwrap_or(0)
+        } else {
+            0
+        };
+
+        if opt.collapse_threats && flags != 0 {
+            flags = crate::models::GeoFlags::PROXY;
+        }
+
+        let (mut lat_fixed, mut lon_fixed) = if features.has_coords() {
+            (
+                geo.map(|g| g.lat_fixed).unwrap_or(0),
+                geo.map(|g| g.lon_fixed).unwrap_or(0),
+            )
+        } else {
+            (0, 0)
+        };
+
+        if opt.lossy_coords {
+            lat_fixed = crate::models::quantize_coordinate(lat_fixed);
+            lon_fixed = crate::models::quantize_coordinate(lon_fixed);
+        }
+
+        MergedEntryV6 {
+            ip_from,
+            ip_to,
+            country,
+            region,
+            city,
+            isp,
+            asn,
+            flags,
+            lat_fixed,
+            lon_fixed,
+        }
+    }
+
+    fn next_raw_interval(&mut self) -> Option<MergedEntryV6> {
+        let features = self.features;
+        let opt = &self.opt;
+
+        match (&mut self.cur_geo, &mut self.cur_px) {
+            (Some(g), None) => {
+                let entry = Self::make_entry(features, opt, g.ip_from, g.ip_to, Some(g), None);
+                self.cur_geo = self.geo_iter.next();
+                Some(entry)
+            }
+            (None, Some(p)) => {
+                let entry = Self::make_entry(features, opt, p.ip_from, p.ip_to, None, Some(p));
+                self.cur_px = self.px_iter.next();
+                Some(entry)
+            }
+            (Some(g), Some(p)) => {
+                if g.ip_to < p.ip_from {
+                    let entry = Self::make_entry(features, opt, g.ip_from, g.ip_to, Some(g), None);
+                    self.cur_geo = self.geo_iter.next();
+                    Some(entry)
+                } else if p.ip_to < g.ip_from {
+                    let entry = Self::make_entry(features, opt, p.ip_from, p.ip_to, None, Some(p));
+                    self.cur_px = self.px_iter.next();
+                    Some(entry)
+                } else {
+                    if g.ip_from < p.ip_from {
+                        let end = p.ip_from - 1;
+                        let entry = Self::make_entry(features, opt, g.ip_from, end, Some(g), None);
+                        g.ip_from = p.ip_from;
+                        return Some(entry);
+                    } else if p.ip_from < g.ip_from {
+                        let end = g.ip_from - 1;
+                        let entry = Self::make_entry(features, opt, p.ip_from, end, None, Some(p));
+                        p.ip_from = g.ip_from;
+                        return Some(entry);
+                    }
+
+                    let overlap_end = g.ip_to.min(p.ip_to);
+                    let entry =
+                        Self::make_entry(features, opt, g.ip_from, overlap_end, Some(g), Some(p));
+
+                    if g.ip_to == overlap_end {
+                        self.cur_geo = self.geo_iter.next();
+                    } else if overlap_end < u128::MAX {
+                        g.ip_from = overlap_end + 1;
+                    } else {
+                        self.cur_geo = None;
+                    }
+
+                    if p.ip_to == overlap_end {
+                        self.cur_px = self.px_iter.next();
+                    } else if overlap_end < u128::MAX {
+                        p.ip_from = overlap_end + 1;
+                    } else {
+                        self.cur_px = None;
+                    }
+
+                    Some(entry)
+                }
+            }
+            (None, None) => None,
+        }
+    }
+}
+
+impl<G, P> Iterator for SweepLineMergerV6<G, P>
+where
+    G: Iterator<Item = crate::compiler::parser::RawGeoRecordV6>,
+    P: Iterator<Item = crate::compiler::parser::RawPxRecordV6>,
+{
+    type Item = MergedEntryV6;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+
+        if !self.opt.coalesce {
+            return self.next_raw_interval();
+        }
+
+        while let Some(curr) = self.next_raw_interval() {
+            match self.pending_prev.take() {
+                Some(mut prev) => {
+                    if prev.ip_to < u128::MAX
+                        && prev.ip_to + 1 == curr.ip_from
+                        && prev.matches_attributes(&curr)
+                    {
+                        prev.ip_to = curr.ip_to;
+                        self.pending_prev = Some(prev);
+                    } else {
+                        self.pending_prev = Some(curr);
+                        return Some(prev);
+                    }
+                }
+                None => {
+                    self.pending_prev = Some(curr);
+                }
+            }
+        }
+
+        if let Some(final_rec) = self.pending_prev.take() {
+            self.finished = true;
+            return Some(final_rec);
+        }
+
+        self.finished = true;
+        None
+    }
+}

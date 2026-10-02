@@ -1,6 +1,6 @@
 [package]
 name = "ipatlas"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 authors = ["ulquiorracode"]
 description = "Ultra-fast zero-copy binary GeoIP and Proxy/VPN threat database compiler and reader in Rust"

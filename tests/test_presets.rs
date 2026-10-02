@@ -112,7 +112,7 @@ fn test_compact_v4_1_layout() {
 
     let reader = IpAtlasReader::open(&out_bin).unwrap();
     assert!(reader.is_compact());
-    assert_eq!(reader.version(), 0x0401);
+    assert_eq!(reader.version(), 0x0501);
     assert_eq!(reader.len(), 2);
     assert_eq!(reader.ranges_compact().len(), 2);
     assert_eq!(
@@ -206,7 +206,7 @@ fn test_compact_v4_1_wide_range_split_and_profile_overflow_fallback() {
 
     let reader_overflow = IpAtlasReader::open(&out_overflow).unwrap();
     assert!(!reader_overflow.is_compact());
-    assert_eq!(reader_overflow.version(), 4);
+    assert_eq!(reader_overflow.version(), 5);
 }
 
 #[test]

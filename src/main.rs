@@ -4,7 +4,7 @@ use std::time::Instant;
 use clap::{Args, Parser, Subcommand};
 use ipatlas::{
     compile, CompilerOptions, FeatureMask, IpAtlasReader, OptimizationConfig, Preset,
-    RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD,
+    RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD, RECORD_SIZE_V6,
 };
 
 #[derive(Parser)]
@@ -20,11 +20,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Compile CSV dataset(s) into IPAtlas binary and archives
-    Compile(CompileArgs),
-    /// Query an IP address in IPAtlas database
+    /// Compile CSV dataset(s) into IPAtlas Generation V5 binary and archives
+    Compile(Box<CompileArgs>),
+    /// Query an IPv4 or IPv6 address in IPAtlas database
     Lookup(LookupArgs),
-    /// Inspect IPAtlas database header and metadata stats
+    /// Inspect IPAtlas database header, CRC32, and metadata stats
     Info(InfoArgs),
     /// Measure lookup throughput and latency
     #[command(name = "bench", alias = "benchmark")]
@@ -45,7 +45,7 @@ struct CompileArgs {
     #[arg(long)]
     features: Option<String>,
 
-    /// Memory layout: standard (12B, V4) or compact (8B, V4.1)
+    /// Memory layout: standard (12B V4 / 36B V6) or compact (8B V4 / 36B V6)
     #[arg(long, default_value = "standard")]
     layout: String,
 
@@ -53,13 +53,21 @@ struct CompileArgs {
     #[arg(short = 'O', long = "opt")]
     optimization: Vec<String>,
 
-    /// Path to IP2Location CSV (DB1, DB3, DB5, DB11, etc.)
+    /// Path to IPv4 IP2Location CSV (DB1, DB3, DB5, DB11, etc.)
     #[arg(long, aliases = ["db", "db5"])]
     geo: Option<PathBuf>,
 
-    /// Path to IP2Proxy CSV (PX1 - PX12)
+    /// Path to IPv4 IP2Proxy CSV (PX1 - PX12)
     #[arg(long, aliases = ["px", "px10"])]
     proxy: Option<PathBuf>,
+
+    /// Path to IPv6 IP2Location CSV (e.g. IP2LOCATION-LITE-DB5.IPV6.CSV)
+    #[arg(long, aliases = ["db-v6", "geo-v6"])]
+    geo_v6: Option<PathBuf>,
+
+    /// Path to IPv6 IP2Proxy CSV (e.g. IP2PROXY-LITE-PX10.IPV6.CSV)
+    #[arg(long, aliases = ["px-v6", "proxy-v6"])]
+    proxy_v6: Option<PathBuf>,
 
     /// Output binary path (.bin)
     #[arg(short = 'o', long = "out")]
@@ -78,7 +86,7 @@ struct CompileArgs {
 struct LookupArgs {
     /// Path to .bin database
     database: PathBuf,
-    /// IPv4 address to look up
+    /// IP address to look up (IPv4 or IPv6)
     ip: String,
 }
 
@@ -115,7 +123,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Compile(args) => run_compile(args)?,
+        Commands::Compile(args) => run_compile(*args)?,
         Commands::Lookup(args) => run_lookup(args)?,
         Commands::Info(args) => run_info(args)?,
         Commands::Bench(args) => run_bench(args)?,
@@ -166,17 +174,37 @@ fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!(e))?;
     }
 
-    let geo_path = args.geo.as_deref();
-    let proxy_path = args.proxy.as_deref();
+    let mut geo_v4 = args.geo.as_deref();
+    let mut geo_v6 = args.geo_v6.as_deref();
+    let mut proxy_v4 = args.proxy.as_deref();
+    let mut proxy_v6 = args.proxy_v6.as_deref();
 
-    if geo_path.is_none() && proxy_path.is_none() {
-        anyhow::bail!("Compilation requires at least --geo or --proxy dataset input");
+    // Auto-detect IPv6 from file name if user passed v6 file in --geo or --proxy
+    if geo_v6.is_none() {
+        if let Some(p) = geo_v4 {
+            if p.to_string_lossy().to_uppercase().contains("IPV6") {
+                geo_v6 = Some(p);
+                geo_v4 = None;
+            }
+        }
+    }
+    if proxy_v6.is_none() {
+        if let Some(p) = proxy_v4 {
+            if p.to_string_lossy().to_uppercase().contains("IPV6") {
+                proxy_v6 = Some(p);
+                proxy_v4 = None;
+            }
+        }
+    }
+
+    if geo_v4.is_none() && proxy_v4.is_none() && geo_v6.is_none() && proxy_v6.is_none() {
+        anyhow::bail!("Compilation requires at least one dataset input (--geo, --proxy, --geo-v6, --proxy-v6)");
     }
 
     let layout_label = if opt_config.compact_ranges {
-        "V4.1 Compact (8B)"
+        "Generation V5 Compact (8B V4 / 36B V6)"
     } else {
-        "V4 Standard (12B)"
+        "Generation V5 Standard (12B V4 / 36B V6)"
     };
     println!(
         "Compiling IPAtlas Database [Layout: {} | Feature Mask: {:#06x}]...",
@@ -185,8 +213,10 @@ fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
     println!("Optimization Configuration: {:?}", opt_config);
 
     let opts = CompilerOptions {
-        geo_path,
-        proxy_path,
+        geo_path: geo_v4,
+        proxy_path: proxy_v4,
+        geo_v6_path: geo_v6,
+        proxy_v6_path: proxy_v6,
         output_path: &args.out,
         features: feature_mask,
         opt: opt_config,
@@ -210,30 +240,18 @@ fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
         .map(|s| format!(" | ZST: {:.1} MB", (s as f64) / (1024.0 * 1024.0)))
         .unwrap_or_default();
 
-    let layout_msg = if stats.is_compact {
-        if stats.records != stats.original_records {
-            format!(
-                " [Layout: V4-Compact (8B) - {} ranges split into {} records]",
-                format_num(stats.original_records),
-                format_num(stats.records)
-            )
-        } else {
-            " [Layout: V4-Compact (8B)]".to_string()
-        }
-    } else {
-        " [Layout: V4-Standard (12B)]".to_string()
-    };
-
     println!(
-        "Successfully compiled {} intervals ({} profiles) in {:.2}s | Binary: {:.1} MB{}{}{}",
+        "Successfully compiled {} intervals (V4: {}, V6: {}, {} profiles) in {:.2}s | Binary: {:.1} MB{}{}",
         format_num(stats.records),
+        format_num(stats.records_v4),
+        format_num(stats.records_v6),
         format_num(stats.profiles),
         stats.elapsed_secs,
         raw_mb,
         gz_msg,
-        zst_msg,
-        layout_msg
+        zst_msg
     );
+    println!("Checksum CRC32: {:#010x}", stats.crc32);
 
     Ok(())
 }
@@ -251,6 +269,7 @@ fn run_lookup(args: LookupArgs) -> anyhow::Result<()> {
 
     if let Some(rec) = res {
         println!("IP:          {}", rec.ip);
+        println!("Type:        {}", if rec.is_v6 { "IPv6" } else { "IPv4" });
         println!("Range:       {}", rec.range_str());
         println!("Country:     {}", rec.country);
         println!(
@@ -282,13 +301,53 @@ fn run_lookup(args: LookupArgs) -> anyhow::Result<()> {
                 "N/A".to_string()
             }
         );
-        println!("Flags:       {:#05x}", rec.flags.0);
-        println!("  Datacenter:  {}", rec.flags.is_datacenter());
-        println!("  Proxy / VPN: {}", rec.flags.is_proxy());
-        println!("  Botnet:      {}", rec.flags.is_botnet());
-        println!("  Spam:        {}", rec.flags.is_spam());
-        println!("  Mobile:      {}", rec.flags.is_mobile());
-        println!("  Residential: {}", rec.flags.is_residential());
+        println!("Flags:       {:#06x}", rec.flags.0);
+        if rec.flags.is_proxy() {
+            println!("  [PROXY DETECTED]");
+            if rec.flags.is_vpn() {
+                println!("  - VPN:         true");
+            }
+            if rec.flags.is_tor() {
+                println!("  - TOR:         true");
+            }
+            if rec.flags.is_datacenter() {
+                println!("  - DCH (DataCenter): true");
+            }
+            if rec.flags.is_pub() {
+                println!("  - PUB (Public Proxy): true");
+            }
+            if rec.flags.is_web() {
+                println!("  - WEB (Web Proxy):    true");
+            }
+            if rec.flags.is_ses() {
+                println!("  - SES (Search Engine Spider): true");
+            }
+            if rec.flags.is_res() {
+                println!("  - RES (Residential Proxy):   true");
+            }
+            if rec.flags.is_cpn() {
+                println!("  - CPN (Consumer Privacy Net): true");
+            }
+            if rec.flags.is_epn() {
+                println!("  - EPN (Enterprise Private Net): true");
+            }
+        }
+        if rec.flags.is_botnet() {
+            println!("  - Threat: BOTNET");
+        }
+        if rec.flags.is_spam() {
+            println!("  - Threat: SPAM");
+        }
+        if rec.flags.is_scanner() {
+            println!("  - Threat: PORT SCANNER");
+        }
+        if rec.flags.is_mobile() {
+            println!("  - Network: MOBILE / 3G / 4G / 5G");
+        }
+        if rec.flags.is_cdn() {
+            println!("  - Network: CDN");
+        }
+
         println!("Lookup Time: {:.2} µs ({} ns)", dt_us, dt.as_nanos());
     } else {
         println!(
@@ -309,27 +368,46 @@ fn run_info(args: InfoArgs) -> anyhow::Result<()> {
     let size_mb = (file_size as f64) / (1024.0 * 1024.0);
     let reader = IpAtlasReader::open(&args.database)?;
 
-    let (version_name, rec_size) = if reader.is_compact() {
-        (
-            "Generation V4 (Compact Layout, 8B/range)",
-            RECORD_SIZE_V4_COMPACT,
-        )
-    } else {
-        (
-            "Generation V4 (Standard Layout, 12B/range)",
-            RECORD_SIZE_V4_STANDARD,
-        )
+    let is_v5 = reader.version() >= 5;
+    let version_name = match reader.version() {
+        5 => "Generation V5 (Standard Dual-Stack: 12B V4 / 36B V6)",
+        0x0501 => "Generation V5 (Compact Dual-Stack: 8B V4 / 36B V6)",
+        4 => "Generation V4 (Standard IPv4: 12B/range)",
+        0x0401 => "Generation V4 (Compact IPv4: 8B/range)",
+        v => Box::leak(format!("Version {:#06x}", v).into_boxed_str()),
     };
 
     println!("Database:       {:?}", args.database);
     println!("Format:         {}", version_name);
-    println!("Records:        {}", format_num(reader.len()));
-    println!("Record Size:    {} bytes", rec_size);
+    println!("Total Records:  {}", format_num(reader.len()));
+    println!("  IPv4 Records: {}", format_num(reader.len_v4()));
+    println!("  IPv6 Records: {}", format_num(reader.len_v6()));
+    if reader.len_v4() > 0 {
+        let v4_sz = if reader.is_compact() {
+            RECORD_SIZE_V4_COMPACT
+        } else {
+            RECORD_SIZE_V4_STANDARD
+        };
+        println!("IPv4 Size:      {} bytes/record", v4_sz);
+    }
+    if is_v5 {
+        println!("IPv6 Size:      {} bytes/record", RECORD_SIZE_V6);
+    }
     println!("Profiles:       {}", format_num(reader.profile_count()));
     println!("Indexed Cities: {}", format_num(reader.city_count()));
     println!("Indexed Regions:{}", format_num(reader.region_count()));
     println!("Indexed ISPs:   {}", format_num(reader.isp_count()));
     println!("File Size:      {:.2} MB", size_mb);
+
+    if let Some(stored_crc) = reader.crc32() {
+        let crc_res = reader.validate_checksum();
+        match crc_res {
+            Ok(()) => println!("Checksum:       OK ({:#010x})", stored_crc),
+            Err(e) => println!("Checksum:       FAIL: {}", e),
+        }
+    } else {
+        println!("Checksum:       N/A (Generation V4 does not store CRC32)");
+    }
 
     Ok(())
 }
