@@ -1,11 +1,9 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use flate2::write::GzEncoder;
-use flate2::Compression;
 use zerocopy::IntoBytes;
 
 use crate::compiler::sweep::{MergedEntry, MergedEntryV6};
@@ -82,8 +80,6 @@ pub struct CompilationStats {
     pub regions: usize,
     pub isps: usize,
     pub raw_size: u64,
-    pub gz_size: Option<u64>,
-    pub zst_size: Option<u64>,
     pub elapsed_secs: f64,
     pub is_compact: bool,
     pub crc32: u32,
@@ -231,12 +227,10 @@ impl DatabaseWriter {
         }
     }
 
-    /// Atomically writes database binary and generates .gz / .zst distributions in parallel via Rayon.
+    /// Atomically writes the database binary image directly to file.
     pub fn write_to_file<P: AsRef<Path>>(
         &self,
         output_path: P,
-        write_gz: bool,
-        write_zst: bool,
     ) -> Result<CompilationStats, std::io::Error> {
         let start = Instant::now();
         let path = output_path.as_ref();
@@ -405,67 +399,6 @@ impl DatabaseWriter {
         std::fs::rename(&tmp_bin_path, path)?;
         let raw_size = std::fs::metadata(path)?.len();
 
-        // 2 & 3. Parallel compression (.bin.gz and .bin.zst) via Rayon
-        let (gz_res, zst_res) = rayon::join(
-            || -> Result<Option<u64>, std::io::Error> {
-                if !write_gz {
-                    return Ok(None);
-                }
-                let gz_path = path.with_extension(format!(
-                    "{}.gz",
-                    path.extension().and_then(|s| s.to_str()).unwrap_or("bin")
-                ));
-                let tmp_gz_path = gz_path.with_extension(format!("tmp.gz.{}", std::process::id()));
-                {
-                    let guard = TempFileGuard(&tmp_gz_path);
-                    let gz_file = File::create(&tmp_gz_path)?;
-                    let mut encoder = GzEncoder::new(BufWriter::new(gz_file), Compression::best());
-                    let mut in_file = File::open(path)?;
-                    std::io::copy(&mut in_file, &mut encoder)?;
-                    let mut inner = encoder.finish()?;
-                    inner.flush()?;
-                    inner.get_ref().sync_all()?;
-                    std::mem::forget(guard);
-                }
-                std::fs::rename(&tmp_gz_path, &gz_path)?;
-                Ok(Some(std::fs::metadata(&gz_path)?.len()))
-            },
-            || -> Result<Option<u64>, std::io::Error> {
-                if !write_zst {
-                    return Ok(None);
-                }
-                let zst_path = path.with_extension(format!(
-                    "{}.zst",
-                    path.extension().and_then(|s| s.to_str()).unwrap_or("bin")
-                ));
-                let tmp_zst_path =
-                    zst_path.with_extension(format!("tmp.zst.{}", std::process::id()));
-                {
-                    let guard = TempFileGuard(&tmp_zst_path);
-                    let zst_file = File::create(&tmp_zst_path)?;
-                    let mut encoder =
-                        zstd::stream::write::Encoder::new(BufWriter::new(zst_file), 19)?;
-                    let mut in_file = File::open(path)?;
-                    let mut buffer = [0u8; 128 * 1024];
-                    loop {
-                        let n = in_file.read(&mut buffer)?;
-                        if n == 0 {
-                            break;
-                        }
-                        encoder.write_all(&buffer[..n])?;
-                    }
-                    let mut inner = encoder.finish()?;
-                    inner.flush()?;
-                    inner.get_ref().sync_all()?;
-                    std::mem::forget(guard);
-                }
-                std::fs::rename(&tmp_zst_path, &zst_path)?;
-                Ok(Some(std::fs::metadata(&zst_path)?.len()))
-            },
-        );
-
-        let gz_size = gz_res?;
-        let zst_size = zst_res?;
         let elapsed = start.elapsed().as_secs_f64();
 
         Ok(CompilationStats {
@@ -478,8 +411,6 @@ impl DatabaseWriter {
             regions: self.regions.offsets.len(),
             isps: self.isps.offsets.len(),
             raw_size,
-            gz_size,
-            zst_size,
             elapsed_secs: elapsed,
             is_compact,
             crc32: calculated_crc32,

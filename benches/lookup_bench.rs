@@ -47,8 +47,7 @@ fn setup_benchmark_db(compact: bool) -> (tempfile::TempDir, std::path::PathBuf) 
     let opts = CompilerOptions::new(&out_bin)
         .geo(Some(&db_path))
         .proxy(Some(&px_path))
-        .optimization(opt)
-        .compression(false, false);
+        .optimization(opt);
 
     compile(opts).unwrap();
     (dir, out_bin)

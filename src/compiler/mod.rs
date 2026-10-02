@@ -32,8 +32,6 @@ pub struct CompilerOptions<'a> {
     pub output_path: &'a Path,
     pub features: FeatureMask,
     pub opt: OptimizationConfig,
-    pub write_gz: bool,
-    pub write_zst: bool,
 }
 
 impl<'a> CompilerOptions<'a> {
@@ -46,8 +44,6 @@ impl<'a> CompilerOptions<'a> {
             output_path,
             features: FeatureMask::default(),
             opt: OptimizationConfig::default(),
-            write_gz: true,
-            write_zst: true,
         }
     }
 
@@ -83,12 +79,6 @@ impl<'a> CompilerOptions<'a> {
 
     pub fn proxy_v6(mut self, path: Option<&'a Path>) -> Self {
         self.proxy_v6_path = path;
-        self
-    }
-
-    pub fn compression(mut self, write_gz: bool, write_zst: bool) -> Self {
-        self.write_gz = write_gz;
-        self.write_zst = write_zst;
         self
     }
 }
@@ -161,6 +151,6 @@ pub fn compile(options: CompilerOptions<'_>) -> Result<CompilationStats, Compile
     }
 
     writer.set_pools(cities, regions, isps);
-    let stats = writer.write_to_file(options.output_path, options.write_gz, options.write_zst)?;
+    let stats = writer.write_to_file(options.output_path)?;
     Ok(stats)
 }

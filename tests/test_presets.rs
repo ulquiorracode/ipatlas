@@ -162,7 +162,7 @@ fn test_compact_v4_1_wide_range_split_and_profile_overflow_fallback() {
 
     let dir = tempfile::tempdir().unwrap();
     let out_bin = dir.path().join("split_test.bin");
-    let stats = writer.write_to_file(&out_bin, false, false).unwrap();
+    let stats = writer.write_to_file(&out_bin).unwrap();
     assert!(stats.is_compact);
     assert_eq!(stats.original_records, 1);
     // 200,000 / 65536 = 3 full chunks (65536 * 3 = 196608) + 1 remainder (3393) = 4 records
@@ -196,9 +196,7 @@ fn test_compact_v4_1_wide_range_split_and_profile_overflow_fallback() {
     writer_overflow.ingest_all(many_entries);
 
     let out_overflow = dir.path().join("overflow_test.bin");
-    let overflow_stats = writer_overflow
-        .write_to_file(&out_overflow, false, false)
-        .unwrap();
+    let overflow_stats = writer_overflow.write_to_file(&out_overflow).unwrap();
     assert!(
         !overflow_stats.is_compact,
         "Should fall back to Standard layout when profiles exceed u16::MAX"

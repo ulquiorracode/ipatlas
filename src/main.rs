@@ -72,14 +72,6 @@ struct CompileArgs {
     /// Output binary path (.bin)
     #[arg(short = 'o', long = "out")]
     out: PathBuf,
-
-    /// Skip .gz compression
-    #[arg(long)]
-    no_gz: bool,
-
-    /// Skip .zst compression
-    #[arg(long)]
-    no_zst: bool,
 }
 
 #[derive(Args)]
@@ -220,8 +212,6 @@ fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
         output_path: &args.out,
         features: feature_mask,
         opt: opt_config,
-        write_gz: !args.no_gz,
-        write_zst: !args.no_zst,
     };
 
     let stats = compile(opts)?;
@@ -231,25 +221,15 @@ fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
     }
 
     let raw_mb = (stats.raw_size as f64) / (1024.0 * 1024.0);
-    let gz_msg = stats
-        .gz_size
-        .map(|s| format!(" | GZ: {:.1} MB", (s as f64) / (1024.0 * 1024.0)))
-        .unwrap_or_default();
-    let zst_msg = stats
-        .zst_size
-        .map(|s| format!(" | ZST: {:.1} MB", (s as f64) / (1024.0 * 1024.0)))
-        .unwrap_or_default();
 
     println!(
-        "Successfully compiled {} intervals (V4: {}, V6: {}, {} profiles) in {:.2}s | Binary: {:.1} MB{}{}",
+        "Successfully compiled {} intervals (V4: {}, V6: {}, {} profiles) in {:.2}s | Binary: {:.1} MB",
         format_num(stats.records),
         format_num(stats.records_v4),
         format_num(stats.records_v6),
         format_num(stats.profiles),
         stats.elapsed_secs,
-        raw_mb,
-        gz_msg,
-        zst_msg
+        raw_mb
     );
     println!("Checksum CRC32: {:#010x}", stats.crc32);
 
