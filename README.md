@@ -1,81 +1,95 @@
 # IPAtlas
 
 [![CI](https://github.com/ulquiorracode/ipatlas/actions/workflows/ci.yml/badge.svg)](https://github.com/ulquiorracode/ipatlas/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/ulquiorracode/ipatlas?color=blue&label=version)](https://github.com/ulquiorracode/ipatlas/releases)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Language: Rust](https://img.shields.io/badge/Language-Rust-orange.svg)](https://www.rust-lang.org/)
 
-Ultra-fast zero-copy binary GeoIP and Proxy/VPN threat database compiler, reader, and specification.
+**IPAtlas** is an ultra-fast, zero-copy binary GeoIP and Proxy/VPN threat intelligence compiler and reader written in Rust.
 
-Designed for high-throughput network engines, game servers (GoldSrc, Source, Rust), packet filters, and microservices requiring sub-microsecond IP classification without external dependencies or heavy in-memory daemons.
+It fuses disjoint Geolocation (IP2Location) and Threat/Proxy datasets (IP2Proxy) into a unified, flat binary search table designed for edge proxies, high-performance firewalls, gamedev servers, and sub-microsecond packet filters.
 
-## Features
+---
 
-- **Zero-Copy Memory-Mapped Access (`mmap`)**: Query directly from disk cache without allocating hundreds of megabytes on the heap.
-- **Sub-Microsecond Lookups**: Strict $O(\log N)$ binary search over contiguous fixed-size records ($\le 23$ comparisons).
-- **1D Streaming Interval Sweep**: Seamlessly merges disjoint Geolocation (IP2Location DB1-DB26) and Proxy Threat Intelligence (IP2Proxy PX1-PX12) into unified atomic IP ranges.
-- **Universal Dataset Support**: Dynamic column detection for all IP2Location LITE/Commercial formats (DB1, DB3, DB5, DB11) and IP2Proxy (PX1 - PX12).
-- **Profile ID Normalization**: 7.95 million ranges map onto ~160k unique profiles, shrinking binary size by **55.2%**.
-- **Extreme Compression**: Zstandard (`.zst`) achieves **26.8x compression** (740 MB CSV down to **27.6 MB**).
+## Architectural Evolution: From PoC to Systems Engine
+
+IPAtlas originally began as a Python prototype (*archived in `poc/python/`*), which validated the core data models: 1D sweep interval alignment, profile normalization (V4), and cascade coalescing.
+
+In version `0.4.0`, IPAtlas was completely rewritten from the ground up in **Rust** as a production systems-level tool and library:
+
+| Characteristic | Python Prototype (PoC) | Rust Systems Engine (v0.4.0) | Improvement |
+| :--- | :--- | :--- | :--- |
+| **Hot L1 Lookup Latency** | 6.07 – 8.33 µs | **66.6 ns** (`0.066 µs`) | **~100x faster** |
+| **Realistic Random Latency (DRAM/L3)** | 7.50 – 9.20 µs | **120 – 180 ns** | **~50x faster** |
+| **Peak Throughput (1 Thread)** | ~120,000 – 164,000 QPS | **~15,000,000 QPS** | **~100x higher** |
+| **Compiler Working Memory** | Several GBs (Python object heap) | **Bounded by output table** (~115 MB for 8M rows) | **Zero risk of OOM** |
+| **Memory Access** | `struct.unpack` copies | **True Zero-Copy** (`zerocopy` + `mmap`, 100% safe) | **Zero heap allocations** |
+| **String Resolution** | Iterative tuple decoding | **SIMD `memchr` slice scan** | **Instant slice views** |
+| **File I/O Safety** | In-place overwrite (crash-vulnerable) | **Atomic write-then-rename + sync** | **Crash-safe persistence** |
+| **Compression** | External shell subprocess | **Native in-process `zstd` (level 19) + gzip** | **Deterministic & portable** |
+
+---
+
+## Key Highlights
+
+- **Sub-100ns Lookups**: Benchmarked at **66.6 ns** hot cache and **~140 ns** cold/random DRAM access on standard modern CPUs.
+- **100% Sound Safe Zero-Copy Kernel Mmap**: Slices verified and referenced directly from kernel page cache via `zerocopy` and `memmap2` without self-referential `unsafe` pointers.
+- **Three-Dimensional Architecture**:
+  - **Presets & Feature Masks**: Strip unneeded metadata to collapse intervals on the fly.
+  - **Optimization Levels (`-O`)**: Semantic rules for cascade interval coalescing, string normalization, and symmetric coordinate quantization.
+  - **Memory Layout Options**:
+    - **V4 Standard (12B)**: `RangeV4` (`from: u32, to: u32, prof_id: u32`), universal 32-bit profile indexing.
+    - **V4.1 Compact (8B)**: `RangeV4Compact` (`from: u32, count: u16, prof_id: u16`), 8 records per 64B cache line (-33% size).
+- **Streaming 1D-Sweep Compiler**: Single $O(N + M)$ streaming sweep merging IP2Location and IP2Proxy without loading whole input CSVs into RAM.
+- **Zero-Data-Loss Guarantee**: Preserves disjoint threat ranges occurring outside IP2Location Geo coverage.
+- **Universal Dataset Support**: Dynamic column detection for all IP2Location (`DB1`, `DB3`, `DB5`, `DB11`) and IP2Proxy (`PX1` – `PX12`) formats.
 - **Bitflag Threat Classification**: Single-cycle bitwise checks for Datacenter/Hosting, Residential ISP, Proxy, VPN, Tor/Botnet, Spam, and Crawlers.
-- **Zero External Dependencies**: Pure Python implementation using only the standard library.
+- **Zero External Runtime Dependencies**: Reader library compiles in under 1 second with `--no-default-features`.
 
-## Benchmarks & Datasets
+---
 
-Tested on raw IP2Location LITE DB5 and IP2Proxy LITE PX10 datasets:
+## Storage Layouts: V4 Standard vs V4.1 Compact
 
-| Database Mode | Source CSV | Binary (`.bin`) | Gzip (`.gz`) | Zstandard (`.zst`) | Ratio (vs .zst) | Records | Profiles |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Unified Full V4 (DB + PX)** | 740 MB | **95.9 MB** *(was 214 MB)* | **35.4 MB** | **27.6 MB** | **26.8x** | 7,946,419 | 159,501 |
-| **Geo-Only (DB5)** | 280 MB | 57.7 MB | 18.8 MB | 13.9 MB | 20.1x | 2,999,603 | — |
-| **Proxy-Only (PX10)** | 460 MB | 48.7 MB | 11.6 MB | 9.4 MB | 48.9x | 2,429,915 | — |
+| Layout Target | Record Size | Fields | Best Used For | 7.95M Ranges Table Size |
+| :--- | :--- | :--- | :--- | :--- |
+| **`V4 Standard`** *(Default)* | **12 bytes** | `ip_from: u32`, `ip_to: u32`, `profile_id: u32` | General purpose, unlimited profiles ($> 65k$), global datasets | **95.9 MB** |
+| **`V4.1 Compact`** (`--layout compact`) | **8 bytes** | `ip_from: u32`, `count: u16`, `profile_id: u16` | Edge proxies, L1/L2 cache locality (8 recs/64B line), $\le 65k$ profiles | **63.5 MB** *(**-33.3%**)* |
 
-### Preset Matrix (Cascade Coalescing)
+---
 
-When compiling targeted databases, unused metadata fields are stripped and contiguous intervals automatically fuse together:
+## Compiler Optimization Flags (`-O`)
 
-| Preset | Active Fields | Primary Use Case | Binary (`.bin`) | Zstandard (`.zst`) | Ratio (vs CSV) |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **`country`** | `Country` | High-speed edge Geo-blocking | **5.6 MB** | **1.2 MB** | **233x** |
-| **`threats`** | `ASN, Threats` | Server/API threat & proxy filtering | **6.8 MB** | **2.1 MB** | **120x** |
-| **`firewall`** | `Country, ASN, Threats` | Firewall rules & access policies | **7.9 MB** | **2.5 MB** | **100x** |
-| **`city`** | `Country, Region, City, Coords` | Classical geolocation without threats | **38.0 MB** | **11.0 MB** | **20x** |
-| **`full`** | *All fields included* | Complete unified analytics & security | **95.9 MB** | **27.6 MB** | **26.8x** |
+IPAtlas provides a compiler optimization pipeline analogous to C/Rust compilers:
 
-### Why IPAtlas vs MaxMind GeoLite2 (`.mmdb`)?
+- **`-O0`**: Raw pass-through. No interval coalescing. Preserves raw source intervals.
+- **`-O1` (Default)**: Safe lossless cascade coalescing + profile deduplication + empty string pruning. Adjacent intervals with identical attributes are fused: $[A, B] \cup [B+1, C] \to [A, C]$.
+- **`-O2`**: `-O1` + whitespace trimming and string normalization.
+- **`-O3`**: `-O2` + symmetric coordinate quantization (~10km resolution, unbiased around zero), maximizing interval coalescing ratio for resource-constrained edge routers.
 
-| Feature / Metric | MaxMind GeoLite2 (`.mmdb`) | IPAtlas (`.bin`) |
-| :--- | :--- | :--- |
-| **Data Scope** | Geo-Only (separate file for ASN) | **Unified**: Geo + ASN + VPN/Proxy/Threats in 1 file |
-| **Lookup Algorithm** | Radix Tree (128-bit bitwise descent) | **Flat Binary Search** $O(\log N)$ ($\le 23$ iterations) |
-| **Memory Access Pattern** | Non-contiguous pointer jumps across tree nodes | **Sequential slice access**, CPU L1/L2 cache friendly |
-| **Zero-Copy Readiness** | Requires complex tree decoding per node | **Instant struct unpack** directly from OS kernel page cache |
-| **Edge Footprint** | ~75 MB (City) / ~6 MB (Country) | **5.6 MB** (`country`) / **7.9 MB** (`firewall`) |
-| **Distribution Size** | ~35 MB (City tar.gz) | **1.2 MB** (`country.zst`) / **27.6 MB** (`full.zst`) |
-
-> [!NOTE]
-> **Version 4 Profile Normalization**: In Unified Full mode, 7.95 million ranges map onto only 159,501 unique metadata profiles `(Country, City, Region, ASN, ISP, Flags, Lat, Lon)`. Each range is reduced from **28 bytes to 12 bytes**, shrinking the uncompressed zero-copy mmap binary by **55.2%** (from 214 MB to 95.9 MB).
-
-## Installation
-
+Fine-grained semantic flags are also supported:
 ```sh
-pip install .
+ipatlas compile -O coalesce,lossy-coords,normalize-strings,compact-ranges ...
 ```
 
-Or run directly without installation:
+---
+
+## Installation & CLI Usage
+
+### Build from Source
 
 ```sh
-python -m ipatlas.cli --help
+git clone https://github.com/ulquiorracode/ipatlas.git
+cd ipatlas
+cargo build --release
 ```
 
-## CLI Usage
+The optimized binary will be located at `./target/release/ipatlas`.
 
 ### 1. Compile Datasets
 
-Compile raw CSVs into a binary database and compressed `.bin.zst` distribution:
+Compile raw CSVs into a binary database with automated `.bin.gz` and `.bin.zst` distributions:
 
 ```sh
-# Unified Full (Geo + Proxy/Threats, e.g. DB5 + PX10 or DB11 + PX12)
+# Unified Full (Standard 12B layout)
 ipatlas compile --mode full \
   --geo IP2LOCATION-LITE-DB5.CSV \
   --proxy IP2PROXY-LITE-PX10.CSV \
@@ -83,23 +97,16 @@ ipatlas compile --mode full \
 
 # Fast Preset Compilation (Cascade Coalescing):
 # - firewall: Country + ASN + Threat flags (~7.9 MB binary, ~2.5 MB .zst)
-ipatlas compile --preset firewall --geo IP2LOCATION-LITE-DB5.CSV --proxy IP2PROXY-LITE-PX10.CSV -o ipatlas_firewall.bin
+ipatlas compile --preset firewall --geo DB5.CSV --proxy PX10.CSV -o ipatlas_firewall.bin
 
 # - country: Pure Geo-Blocking Country-Only (~5.6 MB binary, ~1.2 MB .zst, 233x reduction!)
-ipatlas compile --preset country --geo IP2LOCATION-LITE-DB5.CSV -o ipatlas_country.bin
+ipatlas compile --preset country --geo DB5.CSV -o ipatlas_country.bin
 
 # - city: Country + Region + City + Coordinates without threats (~38 MB binary)
-ipatlas compile --preset city --geo IP2LOCATION-LITE-DB5.CSV -o ipatlas_city.bin
+ipatlas compile --preset city --geo DB5.CSV -o ipatlas_city.bin
 
-# Custom Feature Mask:
-ipatlas compile --features country,asn,threats \
-  --geo IP2LOCATION-LITE-DB5.CSV --proxy IP2PROXY-LITE-PX10.CSV -o custom.bin
-
-# Proxy-Only
-ipatlas compile --mode proxy --proxy IP2PROXY-LITE-PX10.CSV -o ipatlas_proxy.bin
-
-# Geo-Only
-ipatlas compile --mode geo --geo IP2LOCATION-LITE-DB5.CSV -o ipatlas_geo.bin
+# V4.1 Compact Layout (8B records, maximum L1/L2 cache locality):
+ipatlas compile --preset firewall --layout compact --geo DB5.CSV --proxy PX10.CSV -o firewall_compact.bin
 ```
 
 ### 2. Lookup an IP Address
@@ -119,14 +126,14 @@ City:        Mountain View
 Coordinates: 37.41, -122.08
 ISP:         Google LLC
 ASN:         AS15169
-Flags:       0x809 (Proxy/Anonymizer | Datacenter | Commercial)
-  Datacenter:  True
-  Proxy / VPN: True
-  Botnet:      False
-  Spam:        False
-  Mobile:      False
-  Residential: False
-Lookup Time: 0.65 µs
+Flags:       0x0809 (Proxy/Anonymizer | Datacenter | Commercial)
+  Datacenter:  true
+  Proxy / VPN: true
+  Botnet:      false
+  Spam:        false
+  Mobile:      false
+  Residential: false
+Lookup Time: 0.07 µs (67 ns)
 ```
 
 ### 3. Inspect Database Metadata
@@ -138,84 +145,49 @@ ipatlas info ipatlas_full.bin
 ### 4. Benchmark Throughput
 
 ```sh
-# Benchmark an existing binary database
-ipatlas benchmark ipatlas_full.bin -n 100000
+ipatlas bench ipatlas_full.bin -n 1000000
 ```
 
-## Running Tests & Benchmarks
+---
 
-Run the automated test suite and edge cases (boundary conditions for `0.0.0.0`, `255.255.255.255`, and corrupted header resilience):
+## Rust Library API
 
-```sh
-# Run all unit and robustness tests
-python -m unittest discover tests
+Add `ipatlas` to your `Cargo.toml`:
 
-# Run lookup latency and throughput benchmark
-python -m benchmarks.bench_lookup
-
-# Run preset compression and coalesce ratio matrix
-python -m benchmarks.bench_presets
+```toml
+[dependencies]
+ipatlas = "0.4.0"
 ```
 
-## Python API
+For minimal embeddable reader setups without compiler dependencies:
 
-```python
-from ipatlas import IpAtlasReader
-
-with IpAtlasReader("ipatlas_full.bin") as reader:
-    record = reader.lookup("1.1.1.1")
-    if record:
-        print(f"Country: {record.country}, City: {record.city}")
-        print(f"Is Datacenter: {record.flags.is_datacenter}")
-        print(f"Is Proxy/VPN:   {record.flags.is_proxy}")
-        print(f"Is Botnet:      {record.flags.is_botnet}")
+```toml
+[dependencies]
+ipatlas = { version = "0.4.0", default-features = false }
 ```
 
-## Binary Format Specification
+### Example Usage
 
-All multi-byte integers are stored in **Little-Endian** format (`<`).
+```rust
+use ipatlas::IpAtlasReader;
 
-### Full Unified Layout (Version 4 with Profile Normalization)
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let reader = IpAtlasReader::open("ipatlas_full.bin")?;
 
-- **Header (68 bytes)**:
-  - `magic` (4B): `b'ATLS'`
-  - `version` (2B): `0x0004`
-  - `total_records` (4B): `uint32`
-  - `record_size` (2B): `12`
-  - `profile_count` (4B): `uint32` (e.g. 159,501)
-  - `profile_offset` (4B): `uint32`
-  - `city_count` (4B), `c_idx_off` (4B), `c_data_off` (4B), `c_data_len` (4B)
-  - `reg_count` (4B), `r_idx_off` (4B), `r_data_off` (4B), `r_data_len` (4B)
-  - `isp_count` (4B), `i_idx_off` (4B), `i_data_off` (4B), `i_data_len` (4B)
+    // Zero-allocation borrowed lookup (66 ns)
+    if let Some(record) = reader.lookup_ref("1.1.1.1".parse()?) {
+        println!("Country: {}", record.country);
+        println!("City:    {}", record.city);
+        println!("Is Datacenter: {}", record.flags.is_datacenter());
+        println!("Is Proxy/VPN:   {}", record.flags.is_proxy());
+        println!("Is Botnet:      {}", record.flags.is_botnet());
+    }
 
-- **Range Record Structure (12 bytes)**:
-  - `ip_from` (4B, `uint32`)
-  - `ip_to` (4B, `uint32`)
-  - `profile_id` (4B, `uint32`)
+    Ok(())
+}
+```
 
-- **Profile Record Structure (20 bytes)**:
-  - `city_idx` (4B, `uint32`)
-  - `asn` (4B, `uint32`)
-  - `country` (2B, `char[2]`)
-  - `reg_idx` (2B, `uint16`)
-  - `isp_idx` (2B, `uint16`)
-  - `flags` (2B, `uint16`)
-  - `lat_fixed` (2B, `int16` = `round(lat * 100)`)
-  - `lon_fixed` (2B, `int16` = `round(lon * 100)`)
-
-- **Flags Bitmask**:
-  - `0x0001` — Datacenter / Hosting (`DCH`)
-  - `0x0002` — Fixed Residential ISP (`ISP`)
-  - `0x0004` — Mobile Carrier (`MOB`)
-  - `0x0008` — Commercial Enterprise (`COM`)
-  - `0x0010` — Organization (`ORG`)
-  - `0x0020` — Government / Military (`GOV`)
-  - `0x0040` — University / School (`EDU`)
-  - `0x0080` — Content Delivery Network (`CDN`)
-  - `0x0100` — Spam Source (`SPAM`)
-  - `0x0200` — Port / Vulnerability Scanner (`SCANNER`)
-  - `0x0400` — DDoS / Botnet Node (`BOTNET`)
-  - `0x0800` — Proxy / VPN Anonymizer (`PROXY`)
+---
 
 ## Data Attribution & License
 

@@ -1,3 +1,7 @@
+# Rust
+/target/
+**/*.rs.bk
+
 # Python
 __pycache__/
 *.py[cod]
@@ -44,3 +48,4 @@ htmlcov/
 # Compiled Binaries (generated during local runs)
 *.bin
 *.bin.gz
+*.bin.zst

@@ -8,34 +8,31 @@ on:
 
 jobs:
   test:
+    name: Rust Test Suite & Quality Gates
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13']
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          python-version: ${{ matrix.python-version }}
+          components: clippy, rustfmt
 
-      - name: Install system dependencies (zstd)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y zstd
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
 
-      - name: Install package
-        run: |
-          pip install .
+      - name: Check Formatting
+        run: cargo fmt --check
 
-      - name: Run unit & edge cases tests
-        run: |
-          python -m unittest discover tests
+      - name: Run Clippy (Pedantic Warnings as Errors)
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Run benchmark sanity check
-        run: |
-          python -m benchmarks.bench_presets
-          python -m benchmarks.bench_lookup
+      - name: Run Unit & Integration Tests
+        run: cargo test --all-targets
+
+      - name: Verify Reader-Only Build (no-default-features)
+        run: cargo check --no-default-features
+
+      - name: Smoke Test Benchmark Harness
+        run: cargo test --benches

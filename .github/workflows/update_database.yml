@@ -21,15 +21,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Install dependencies and tools
-        run: |
-          sudo apt-get update && sudo apt-get install -y zstd
-          pip install .
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build IPAtlas Release Binary
+        run: cargo build --release
 
       - name: Determine Release Tag
         id: vars
@@ -68,13 +67,13 @@ jobs:
           fi
           
           echo "1. Compiling Unified Full Database (V4 Profile Normalization)..."
-          python -m ipatlas.cli compile --mode full --geo "$DB5_FILE" --proxy "$PX10_FILE" --out dist/ipatlas_full.bin
+          ./target/release/ipatlas compile --mode full --geo "$DB5_FILE" --proxy "$PX10_FILE" --out dist/ipatlas_full.bin
           
           echo "2. Compiling Proxy-Only Database..."
-          python -m ipatlas.cli compile --mode proxy --proxy "$PX10_FILE" --out dist/ipatlas_proxy.bin
+          ./target/release/ipatlas compile --mode proxy --proxy "$PX10_FILE" --out dist/ipatlas_proxy.bin
           
           echo "3. Compiling Geo-Only Database..."
-          python -m ipatlas.cli compile --mode geo --geo "$DB5_FILE" --out dist/ipatlas_geo.bin
+          ./target/release/ipatlas compile --mode geo --geo "$DB5_FILE" --out dist/ipatlas_geo.bin
 
       - name: Generate SHA256 Checksums
         run: |
@@ -98,10 +97,9 @@ jobs:
             - `ipatlas_geo.bin.zst` (~14 MB) / `.bin.gz` (~19 MB) — **Geo-Only**: Country, Region, City, Lat/Lon.
             
             ### Attribution
-            This site or product includes IP2Location LITE data available from [https://lite.ip2location.com](https://lite.ip2location.com).
+            This release contains data from IP2Location LITE (https://lite.ip2location.com).
           files: |
-            dist/*.bin.zst
+            dist/*.bin
             dist/*.bin.gz
+            dist/*.bin.zst
             dist/checksums.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
