@@ -6,6 +6,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-10-02
+
+### Added
+
+- **Complete Rust Engine Rewrite**: Transitioned the entire IPAtlas codebase from the Python prototype (PoC) into a production-grade, memory-safe, systems-level library and CLI in Rust.
+- **Sub-100ns Lookup Performance**: Achieved **66.6 nanoseconds** per lookup (**~15,000,000 queries/second** single-threaded) via Criterion benchmarks — a **~100x throughput leap** over Python.
+- **Zero-Allocation Hot Path**: Added `GeoRecordRef<'a>` and `lookup_u32`, enabling true zero-copy inspection directly from kernel mmap page cache using `zerocopy`, `memmap2`, and SIMD `memchr`.
+- **Compiler Optimization Pipeline (`-O`)**:
+  - `-O0`: Raw pass-through intervals without coalescing.
+  - `-O1` (Default): Lossless cascade interval coalescing, profile deduplication, and empty string pruning.
+  - `-O2`: `-O1` + case/whitespace string normalization.
+  - `-O3`: `-O2` + lossy coordinate quantization (~10km resolution) for maximum edge reduction.
+  - Fine-grained semantic flags: `-O coalesce`, `-O lossy-coords`, `-O normalize-strings`, `-O collapse-threats`.
+- **Streaming 1D-Sweep Line Compiler**: $O(N + M)$ single-pass sweep with $O(1)$ working memory, eliminating multi-gigabyte RAM allocation during large dataset compilation.
+- **Zero Data Loss Guarantee**: Fixed boundary sweep behavior so disjoint PX threat ranges outside Geo coverage are completely preserved.
+- **Native Embedded Compression**: Direct in-process Zstandard compression (level 19) and Gzip compression via `zstd` and `flate2`, eliminating external subprocess binaries.
+- **Modular Cargo Architecture**: Reader-only client mode (`--no-default-features`) compiles in under 1 second with minimal dependencies (`memmap2`, `zerocopy`, `memchr`).
+- **Benchmark Suite & Tests**: Full integration test suite (`tests/`) and Criterion benchmarks (`benches/lookup_bench.rs`).
+
+### Changed
+
+- **Python PoC Archival**: The initial Python prototype scripts and tests have been preserved under `poc/python/` as the historical proof-of-concept phase.
+- **CI/CD Quality Gates**: Upgraded GitHub Actions workflow to native Rust test runner with pedantic clippy enforcement and format checks.
+
 ## [0.3.0] - 2026-10-01
 
 ### Added
