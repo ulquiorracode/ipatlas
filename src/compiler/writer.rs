@@ -57,6 +57,7 @@ impl StringPool {
 #[derive(Clone, Debug)]
 pub struct CompilationStats {
     pub records: usize,
+    pub original_records: usize,
     pub profiles: usize,
     pub cities: usize,
     pub regions: usize,
@@ -76,6 +77,7 @@ enum RangeStorage {
 
 pub struct DatabaseWriter {
     storage: RangeStorage,
+    original_records: usize,
     profiles: Vec<ProfileV4>,
     profile_map: HashMap<ProfileV4, u32>,
     cities: StringPool,
@@ -94,6 +96,7 @@ impl DatabaseWriter {
 
         Self {
             storage,
+            original_records: 0,
             profiles: Vec::new(),
             profile_map: HashMap::new(),
             cities: StringPool::new(),
@@ -106,6 +109,7 @@ impl DatabaseWriter {
     /// Ingests a stream of merged entries, building range intervals, profiles, and string pools.
     pub fn ingest_all<I: Iterator<Item = MergedEntry>>(&mut self, entries: I) {
         for entry in entries {
+            self.original_records += 1;
             let city_idx = self.cities.get_or_insert(&entry.city, self.opt.prune_empty);
             let reg_idx =
                 self.regions
@@ -137,6 +141,21 @@ impl DatabaseWriter {
                 self.profiles.push(prof);
                 id
             };
+
+            // If profile_id exceeds u16::MAX in Compact mode, transparently fallback to Standard
+            if let RangeStorage::Compact(vec) = &mut self.storage {
+                if profile_id > u16::MAX as u32 {
+                    eprintln!(
+                        "Warning: profile count ({}) exceeds u16::MAX (65535). Falling back from V4.1 Compact to V4 Standard layout.",
+                        profile_id + 1
+                    );
+                    let mut std_vec = Vec::with_capacity(vec.len() + 1);
+                    for r in vec.drain(..) {
+                        std_vec.push(RangeV4::new(r.ip_from, r.ip_to(), r.profile_id as u32));
+                    }
+                    self.storage = RangeStorage::Standard(std_vec);
+                }
+            }
 
             match &mut self.storage {
                 RangeStorage::Standard(vec) => {
@@ -233,9 +252,18 @@ impl DatabaseWriter {
             isp_data_len: i_data_len,
         };
 
+        // Struct to ensure cleanup of temporary files if an error occurs
+        struct TempFileGuard<'a>(&'a Path);
+        impl<'a> Drop for TempFileGuard<'a> {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(self.0);
+            }
+        }
+
         // 1. Atomic write to temporary file
         let tmp_bin_path = path.with_extension(format!("tmp.{}", std::process::id()));
         {
+            let guard = TempFileGuard(&tmp_bin_path);
             let file = File::create(&tmp_bin_path)?;
             let mut writer = BufWriter::with_capacity(1024 * 1024, file);
 
@@ -275,6 +303,7 @@ impl DatabaseWriter {
 
             writer.flush()?;
             writer.get_ref().sync_all()?;
+            std::mem::forget(guard);
         }
 
         // Atomic rename into target path
@@ -289,6 +318,7 @@ impl DatabaseWriter {
             ));
             let tmp_gz_path = gz_path.with_extension(format!("tmp.{}", std::process::id()));
             {
+                let guard = TempFileGuard(&tmp_gz_path);
                 let gz_file = File::create(&tmp_gz_path)?;
                 let mut encoder = GzEncoder::new(BufWriter::new(gz_file), Compression::best());
                 let mut in_file = File::open(path)?;
@@ -296,6 +326,7 @@ impl DatabaseWriter {
                 let mut inner = encoder.finish()?;
                 inner.flush()?;
                 inner.get_ref().sync_all()?;
+                std::mem::forget(guard);
             }
             std::fs::rename(&tmp_gz_path, &gz_path)?;
             Some(std::fs::metadata(&gz_path)?.len())
@@ -311,6 +342,7 @@ impl DatabaseWriter {
             ));
             let tmp_zst_path = zst_path.with_extension(format!("tmp.{}", std::process::id()));
             {
+                let guard = TempFileGuard(&tmp_zst_path);
                 let zst_file = File::create(&tmp_zst_path)?;
                 let mut encoder = zstd::stream::write::Encoder::new(BufWriter::new(zst_file), 19)?;
                 let mut in_file = File::open(path)?;
@@ -325,6 +357,7 @@ impl DatabaseWriter {
                 let mut inner = encoder.finish()?;
                 inner.flush()?;
                 inner.get_ref().sync_all()?;
+                std::mem::forget(guard);
             }
             std::fs::rename(&tmp_zst_path, &zst_path)?;
             Some(std::fs::metadata(&zst_path)?.len())
@@ -336,6 +369,7 @@ impl DatabaseWriter {
 
         Ok(CompilationStats {
             records: total_records as usize,
+            original_records: self.original_records,
             profiles: self.profiles.len(),
             cities: self.cities.offsets.len(),
             regions: self.regions.offsets.len(),

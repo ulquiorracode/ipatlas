@@ -130,6 +130,83 @@ fn test_compact_v4_1_layout() {
 }
 
 #[test]
+fn test_compact_v4_1_wide_range_split_and_profile_overflow_fallback() {
+    use ipatlas::compiler::sweep::MergedEntry;
+    use ipatlas::compiler::DatabaseWriter;
+
+    // 1. Test wide interval split (> 65535 IPs)
+    let opt = OptimizationConfig {
+        compact_ranges: true,
+        ..Default::default()
+    };
+    let mut writer = DatabaseWriter::new(opt.clone());
+
+    // Single interval covering 200,000 IPs: 10.0.0.0 to 10.3.13.63
+    let entries = vec![MergedEntry {
+        ip_from: 167772160,
+        ip_to: 167772160 + 200_000,
+        country: *b"DE",
+        region: "Bavaria".to_string(),
+        city: "Munich".to_string(),
+        isp: "Telekom".to_string(),
+        asn: 3320,
+        flags: 0,
+        lat_fixed: 4813,
+        lon_fixed: 1158,
+    }];
+    writer.ingest_all(entries.into_iter());
+
+    let dir = tempfile::tempdir().unwrap();
+    let out_bin = dir.path().join("split_test.bin");
+    let stats = writer.write_to_file(&out_bin, false, false).unwrap();
+    assert!(stats.is_compact);
+    assert_eq!(stats.original_records, 1);
+    // 200,000 / 65536 = 3 full chunks (65536 * 3 = 196608) + 1 remainder (3393) = 4 records
+    assert_eq!(stats.records, 4);
+
+    let reader = IpAtlasReader::open(&out_bin).unwrap();
+    let rec_start = reader.lookup_u32(167772160).unwrap();
+    assert_eq!(rec_start.country, "DE");
+    let rec_end = reader.lookup_u32(167772160 + 200_000).unwrap();
+    assert_eq!(rec_end.country, "DE");
+
+    // 2. Test fallback to Standard layout when profile_id > 65535
+    let mut writer_overflow = DatabaseWriter::new(OptimizationConfig {
+        compact_ranges: true,
+        dedup_profiles: false, // Ensure distinct profile IDs
+        ..Default::default()
+    });
+
+    let many_entries = (0..70_000u32).map(|i| MergedEntry {
+        ip_from: i * 4,
+        ip_to: i * 4 + 3,
+        country: *b"FR",
+        region: format!("Reg{}", i),
+        city: format!("City{}", i),
+        isp: format!("ISP{}", i),
+        asn: i,
+        flags: 0,
+        lat_fixed: 0,
+        lon_fixed: 0,
+    });
+    writer_overflow.ingest_all(many_entries);
+
+    let out_overflow = dir.path().join("overflow_test.bin");
+    let overflow_stats = writer_overflow
+        .write_to_file(&out_overflow, false, false)
+        .unwrap();
+    assert!(
+        !overflow_stats.is_compact,
+        "Should fall back to Standard layout when profiles exceed u16::MAX"
+    );
+    assert_eq!(overflow_stats.profiles, 70_000);
+
+    let reader_overflow = IpAtlasReader::open(&out_overflow).unwrap();
+    assert!(!reader_overflow.is_compact());
+    assert_eq!(reader_overflow.version(), 4);
+}
+
+#[test]
 fn test_optimization_flags_levels_and_symmetric_quantization() {
     let mut opt = OptimizationConfig::default();
     assert!(opt.coalesce);

@@ -206,14 +206,29 @@ fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
         .map(|s| format!(" | ZST: {:.1} MB", (s as f64) / (1024.0 * 1024.0)))
         .unwrap_or_default();
 
+    let layout_msg = if stats.is_compact {
+        if stats.records != stats.original_records {
+            format!(
+                " [Layout: V4.1 Compact (8B) - {} ranges split into {} records]",
+                format_num(stats.original_records),
+                format_num(stats.records)
+            )
+        } else {
+            " [Layout: V4.1 Compact (8B)]".to_string()
+        }
+    } else {
+        " [Layout: V4 Standard (12B)]".to_string()
+    };
+
     println!(
-        "Successfully compiled {} intervals ({} profiles) in {:.2}s | Binary: {:.1} MB{}{}",
+        "Successfully compiled {} intervals ({} profiles) in {:.2}s | Binary: {:.1} MB{}{}{}",
         format_num(stats.records),
         format_num(stats.profiles),
         stats.elapsed_secs,
         raw_mb,
         gz_msg,
-        zst_msg
+        zst_msg,
+        layout_msg
     );
 
     Ok(())
