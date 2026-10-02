@@ -1,3 +1,4 @@
+pub mod crc;
 pub mod features;
 pub mod header;
 pub mod optimization;
@@ -6,6 +7,7 @@ pub mod profile;
 pub mod range;
 pub mod record;
 
+pub use crc::{compute_crc32, Crc32};
 pub use features::FeatureMask;
 pub use header::{
     HeaderV4, HeaderV5, HEADER_SIZE_V4, HEADER_SIZE_V5, MAGIC, PROFILE_SIZE_V4,

@@ -5,12 +5,11 @@ use std::path::Path;
 use thiserror::Error;
 use zerocopy::FromBytes;
 
-use crate::compiler::writer::compute_crc32;
 use crate::models::{
-    GeoFlags, GeoRecord, GeoRecordRef, HeaderV4, HeaderV5, ProfileV4, RangeV4, RangeV4Compact,
-    RangeV6, HEADER_SIZE_V4, HEADER_SIZE_V5, MAGIC, PROFILE_SIZE_V4, RECORD_SIZE_V4_COMPACT,
-    RECORD_SIZE_V4_STANDARD, RECORD_SIZE_V6, VERSION_V4_COMPACT, VERSION_V4_STANDARD,
-    VERSION_V5_COMPACT, VERSION_V5_STANDARD,
+    compute_crc32, GeoFlags, GeoRecord, GeoRecordRef, HeaderV4, HeaderV5, ProfileV4, RangeV4,
+    RangeV4Compact, RangeV6, HEADER_SIZE_V4, HEADER_SIZE_V5, MAGIC, PROFILE_SIZE_V4,
+    RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD, RECORD_SIZE_V6, VERSION_V4_COMPACT,
+    VERSION_V4_STANDARD, VERSION_V5_COMPACT, VERSION_V5_STANDARD,
 };
 
 #[derive(Error, Debug)]
