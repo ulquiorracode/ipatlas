@@ -5,8 +5,10 @@ pub mod reader;
 pub mod compiler;
 
 pub use models::{
-    FeatureMask, GeoFlags, GeoRecord, GeoRecordRef, HeaderV4, OptRule, OptimizationConfig, Preset,
-    ProfileV4, RangeV4, HEADER_SIZE_V4, MAGIC, PROFILE_SIZE_V4, RECORD_SIZE_V4, VERSION_V4,
+    quantize_coordinate, FeatureMask, GeoFlags, GeoRecord, GeoRecordRef, HeaderV4, OptRule,
+    OptimizationConfig, Preset, ProfileV4, RangeV4, RangeV4Compact, HEADER_SIZE_V4, MAGIC,
+    PROFILE_SIZE_V4, RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD, VERSION_V4_COMPACT,
+    VERSION_V4_STANDARD,
 };
 pub use reader::{IpAtlasReader, ReaderError};
 

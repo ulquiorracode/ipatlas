@@ -10,8 +10,9 @@ use zerocopy::IntoBytes;
 
 use crate::compiler::sweep::MergedEntry;
 use crate::models::{
-    HeaderV4, OptimizationConfig, ProfileV4, RangeV4, HEADER_SIZE_V4, MAGIC, PROFILE_SIZE_V4,
-    RECORD_SIZE_V4, VERSION_V4,
+    HeaderV4, OptimizationConfig, ProfileV4, RangeV4, RangeV4Compact, HEADER_SIZE_V4, MAGIC,
+    PROFILE_SIZE_V4, RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD, VERSION_V4_COMPACT,
+    VERSION_V4_STANDARD,
 };
 
 #[derive(Default)]
@@ -64,11 +65,17 @@ pub struct CompilationStats {
     pub gz_size: Option<u64>,
     pub zst_size: Option<u64>,
     pub elapsed_secs: f64,
+    pub is_compact: bool,
     pub bin_path: PathBuf,
 }
 
+enum RangeStorage {
+    Standard(Vec<RangeV4>),
+    Compact(Vec<RangeV4Compact>),
+}
+
 pub struct DatabaseWriter {
-    ranges: Vec<RangeV4>,
+    storage: RangeStorage,
     profiles: Vec<ProfileV4>,
     profile_map: HashMap<ProfileV4, u32>,
     cities: StringPool,
@@ -79,8 +86,14 @@ pub struct DatabaseWriter {
 
 impl DatabaseWriter {
     pub fn new(opt: OptimizationConfig) -> Self {
+        let storage = if opt.compact_ranges {
+            RangeStorage::Compact(Vec::new())
+        } else {
+            RangeStorage::Standard(Vec::new())
+        };
+
         Self {
-            ranges: Vec::new(),
+            storage,
             profiles: Vec::new(),
             profile_map: HashMap::new(),
             cities: StringPool::new(),
@@ -125,12 +138,31 @@ impl DatabaseWriter {
                 id
             };
 
-            self.ranges
-                .push(RangeV4::new(entry.ip_from, entry.ip_to, profile_id));
+            match &mut self.storage {
+                RangeStorage::Standard(vec) => {
+                    vec.push(RangeV4::new(entry.ip_from, entry.ip_to, profile_id));
+                }
+                RangeStorage::Compact(vec) => {
+                    // Split intervals wider than u16::MAX so they fit in compact count field
+                    let mut curr_from = entry.ip_from;
+                    let target_to = entry.ip_to;
+                    let prof_u16 = profile_id as u16;
+
+                    while curr_from <= target_to {
+                        let span = (target_to - curr_from).min(u16::MAX as u32);
+                        vec.push(RangeV4Compact::new(curr_from, span as u16, prof_u16));
+                        if span == u16::MAX as u32 && curr_from < u32::MAX - span {
+                            curr_from += span + 1;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 
-    /// Writes the compiled binary database and generates .gz and .zst compressed distributions.
+    /// Atomically writes the database binary and generates .gz / .zst distributions.
     pub fn write_to_file<P: AsRef<Path>>(
         &self,
         output_path: P,
@@ -143,10 +175,25 @@ impl DatabaseWriter {
             std::fs::create_dir_all(parent)?;
         }
 
-        let total_records = self.ranges.len() as u32;
+        let is_compact = matches!(self.storage, RangeStorage::Compact(_));
+        let total_records = match &self.storage {
+            RangeStorage::Standard(vec) => vec.len() as u32,
+            RangeStorage::Compact(vec) => vec.len() as u32,
+        };
         let profile_count = self.profiles.len() as u32;
 
-        let records_size = (total_records as usize) * (RECORD_SIZE_V4 as usize);
+        let record_size = if is_compact {
+            RECORD_SIZE_V4_COMPACT
+        } else {
+            RECORD_SIZE_V4_STANDARD
+        };
+        let version = if is_compact {
+            VERSION_V4_COMPACT
+        } else {
+            VERSION_V4_STANDARD
+        };
+
+        let records_size = (total_records as usize) * (record_size as usize);
         let prof_size = (profile_count as usize) * PROFILE_SIZE_V4;
 
         let prof_offset = (HEADER_SIZE_V4 + records_size) as u32;
@@ -167,9 +214,9 @@ impl DatabaseWriter {
 
         let header = HeaderV4 {
             magic: MAGIC,
-            version: VERSION_V4,
+            version,
             total_records,
-            record_size: RECORD_SIZE_V4,
+            record_size,
             profile_count,
             profile_offset: prof_offset,
             city_count: self.cities.offsets.len() as u32,
@@ -186,74 +233,100 @@ impl DatabaseWriter {
             isp_data_len: i_data_len,
         };
 
-        // 1. Write binary database
-        let file = File::create(path)?;
-        let mut writer = BufWriter::with_capacity(1024 * 1024, file);
+        // 1. Atomic write to temporary file
+        let tmp_bin_path = path.with_extension(format!("tmp.{}", std::process::id()));
+        {
+            let file = File::create(&tmp_bin_path)?;
+            let mut writer = BufWriter::with_capacity(1024 * 1024, file);
 
-        writer.write_all(header.as_bytes())?;
+            writer.write_all(header.as_bytes())?;
 
-        for r in &self.ranges {
-            writer.write_all(r.as_bytes())?;
+            match &self.storage {
+                RangeStorage::Standard(vec) => {
+                    for r in vec {
+                        writer.write_all(r.as_bytes())?;
+                    }
+                }
+                RangeStorage::Compact(vec) => {
+                    for r in vec {
+                        writer.write_all(r.as_bytes())?;
+                    }
+                }
+            }
+
+            for p in &self.profiles {
+                writer.write_all(p.as_bytes())?;
+            }
+
+            for off in &self.cities.offsets {
+                writer.write_all(&off.to_le_bytes())?;
+            }
+            writer.write_all(&self.cities.blob)?;
+
+            for off in &self.regions.offsets {
+                writer.write_all(&off.to_le_bytes())?;
+            }
+            writer.write_all(&self.regions.blob)?;
+
+            for off in &self.isps.offsets {
+                writer.write_all(&off.to_le_bytes())?;
+            }
+            writer.write_all(&self.isps.blob)?;
+
+            writer.flush()?;
+            writer.get_ref().sync_all()?;
         }
 
-        for p in &self.profiles {
-            writer.write_all(p.as_bytes())?;
-        }
-
-        for off in &self.cities.offsets {
-            writer.write_all(&off.to_le_bytes())?;
-        }
-        writer.write_all(&self.cities.blob)?;
-
-        for off in &self.regions.offsets {
-            writer.write_all(&off.to_le_bytes())?;
-        }
-        writer.write_all(&self.regions.blob)?;
-
-        for off in &self.isps.offsets {
-            writer.write_all(&off.to_le_bytes())?;
-        }
-        writer.write_all(&self.isps.blob)?;
-
-        writer.flush()?;
-        drop(writer);
-
+        // Atomic rename into target path
+        std::fs::rename(&tmp_bin_path, path)?;
         let raw_size = std::fs::metadata(path)?.len();
 
-        // 2. Native Gzip compression (.bin.gz)
+        // 2. Atomic Gzip compression (.bin.gz)
         let gz_size = if write_gz {
             let gz_path = path.with_extension(format!(
                 "{}.gz",
                 path.extension().and_then(|s| s.to_str()).unwrap_or("bin")
             ));
-            let gz_file = File::create(&gz_path)?;
-            let mut encoder = GzEncoder::new(BufWriter::new(gz_file), Compression::best());
-            let mut in_file = File::open(path)?;
-            std::io::copy(&mut in_file, &mut encoder)?;
-            encoder.finish()?;
+            let tmp_gz_path = gz_path.with_extension(format!("tmp.{}", std::process::id()));
+            {
+                let gz_file = File::create(&tmp_gz_path)?;
+                let mut encoder = GzEncoder::new(BufWriter::new(gz_file), Compression::best());
+                let mut in_file = File::open(path)?;
+                std::io::copy(&mut in_file, &mut encoder)?;
+                let mut inner = encoder.finish()?;
+                inner.flush()?;
+                inner.get_ref().sync_all()?;
+            }
+            std::fs::rename(&tmp_gz_path, &gz_path)?;
             Some(std::fs::metadata(&gz_path)?.len())
         } else {
             None
         };
 
-        // 3. Native Zstandard compression (.bin.zst) at maximum level 19
+        // 3. Atomic Zstandard compression (.bin.zst) at maximum level 19
         let zst_size = if write_zst {
             let zst_path = path.with_extension(format!(
                 "{}.zst",
                 path.extension().and_then(|s| s.to_str()).unwrap_or("bin")
             ));
-            let zst_file = File::create(&zst_path)?;
-            let mut encoder = zstd::stream::write::Encoder::new(BufWriter::new(zst_file), 19)?;
-            let mut in_file = File::open(path)?;
-            let mut buffer = [0u8; 128 * 1024];
-            loop {
-                let n = in_file.read(&mut buffer)?;
-                if n == 0 {
-                    break;
+            let tmp_zst_path = zst_path.with_extension(format!("tmp.{}", std::process::id()));
+            {
+                let zst_file = File::create(&tmp_zst_path)?;
+                let mut encoder = zstd::stream::write::Encoder::new(BufWriter::new(zst_file), 19)?;
+                let mut in_file = File::open(path)?;
+                let mut buffer = [0u8; 128 * 1024];
+                loop {
+                    let n = in_file.read(&mut buffer)?;
+                    if n == 0 {
+                        break;
+                    }
+                    encoder.write_all(&buffer[..n])?;
                 }
-                encoder.write_all(&buffer[..n])?;
+                let mut inner = encoder.finish()?;
+                inner.flush()?;
+                inner.get_ref().sync_all()?;
             }
-            encoder.finish()?;
+            std::fs::rename(&tmp_zst_path, &zst_path)?;
             Some(std::fs::metadata(&zst_path)?.len())
         } else {
             None
@@ -262,7 +335,7 @@ impl DatabaseWriter {
         let elapsed = start.elapsed().as_secs_f64();
 
         Ok(CompilationStats {
-            records: self.ranges.len(),
+            records: total_records as usize,
             profiles: self.profiles.len(),
             cities: self.cities.offsets.len(),
             regions: self.regions.offsets.len(),
@@ -271,6 +344,7 @@ impl DatabaseWriter {
             gz_size,
             zst_size,
             elapsed_secs: elapsed,
+            is_compact,
             bin_path: path.to_path_buf(),
         })
     }

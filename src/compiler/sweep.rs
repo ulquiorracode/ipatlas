@@ -133,9 +133,9 @@ where
         };
 
         if opt.lossy_coords {
-            // Quantize fixed coordinates to 1 decimal place (~10km)
-            lat_fixed = (lat_fixed / 10) * 10;
-            lon_fixed = (lon_fixed / 10) * 10;
+            // Symmetrically quantize fixed coordinates to 1 decimal place (~10km) without zero-bias
+            lat_fixed = crate::models::quantize_coordinate(lat_fixed);
+            lon_fixed = crate::models::quantize_coordinate(lon_fixed);
         }
 
         MergedEntry {

@@ -3,16 +3,18 @@
 pub enum OptRule {
     /// Merge adjacent intervals [A, B] and [B+1, C] with identical feature profiles.
     Coalesce,
-    /// Pool identical metadata tuples into normalized Profile IDs (V4).
+    /// Pool identical metadata tuples into normalized Profile IDs.
     DedupProfiles,
     /// Trim whitespace and deduplicate string entries case-sensitively.
     NormalizeStrings,
-    /// Quantize coordinates to 1 decimal place (~10km) to maximize coalescing and profile reuse.
+    /// Quantize coordinates symmetrically to 1 decimal place (~10km) without zero-bias.
     LossyCoords,
     /// Prune empty/dash string entries so they reference index 0.
     PruneEmpty,
     /// Strip sub-category threat flags, collapsing into generic proxy flag.
     CollapseThreats,
+    /// Format V4.1 Compact: 8-byte range intervals (ip_from: u32, count: u16, profile_id: u16).
+    CompactRanges,
 }
 
 /// Optimization configuration representing chosen compiler transformation flags.
@@ -24,6 +26,7 @@ pub struct OptimizationConfig {
     pub lossy_coords: bool,
     pub prune_empty: bool,
     pub collapse_threats: bool,
+    pub compact_ranges: bool,
 }
 
 impl Default for OptimizationConfig {
@@ -43,6 +46,7 @@ impl OptimizationConfig {
             lossy_coords: false,
             prune_empty: true,
             collapse_threats: false,
+            compact_ranges: false,
         }
     }
 
@@ -55,6 +59,7 @@ impl OptimizationConfig {
             lossy_coords: false,
             prune_empty: true,
             collapse_threats: false,
+            compact_ranges: false,
         }
     }
 
@@ -67,10 +72,11 @@ impl OptimizationConfig {
             lossy_coords: false,
             prune_empty: true,
             collapse_threats: false,
+            compact_ranges: false,
         }
     }
 
-    /// -O3: -O2 + lossy coordinate quantization (maximum edge compression).
+    /// -O3: -O2 + lossy coordinate quantization (maximum edge reduction).
     pub fn level_3() -> Self {
         Self {
             coalesce: true,
@@ -79,10 +85,11 @@ impl OptimizationConfig {
             lossy_coords: true,
             prune_empty: true,
             collapse_threats: false,
+            compact_ranges: false,
         }
     }
 
-    /// Parses optimization level or list of rules (e.g. "-O2", "O1", "coalesce,lossy-coords").
+    /// Parses optimization level or list of rules (e.g. "-O2", "O1", "coalesce,compact-ranges").
     pub fn parse_arg(&mut self, s: &str) -> Result<(), String> {
         let trimmed = s.trim();
         let stripped = trimmed
@@ -121,9 +128,20 @@ impl OptimizationConfig {
                 "lossy-coords" | "lossy" => self.lossy_coords = true,
                 "prune-empty" => self.prune_empty = true,
                 "collapse-threats" => self.collapse_threats = true,
-                other => return Err(format!("Unknown optimization rule or level: '{}'. Available: 0, 1, 2, 3, coalesce, normalize-strings, lossy-coords, prune-empty, collapse-threats", other)),
+                "compact" | "compact-ranges" | "v4.1" | "v4-compact" => self.compact_ranges = true,
+                other => return Err(format!("Unknown optimization rule or level: '{}'. Available: 0, 1, 2, 3, coalesce, normalize-strings, lossy-coords, prune-empty, collapse-threats, compact-ranges", other)),
             }
         }
         Ok(())
+    }
+}
+
+/// Symmetrically quantizes fixed-point coordinates to nearest multiple of 10 (~10km) without zero-truncation bias.
+#[inline(always)]
+pub fn quantize_coordinate(val: i16) -> i16 {
+    if val >= 0 {
+        ((val + 5) / 10) * 10
+    } else {
+        ((val - 5) / 10) * 10
     }
 }

@@ -4,9 +4,9 @@ use std::io::Write;
 use std::net::Ipv4Addr;
 use tempfile::tempdir;
 
-use ipatlas::{compile, CompilerOptions, IpAtlasReader};
+use ipatlas::{compile, CompilerOptions, IpAtlasReader, OptimizationConfig};
 
-fn setup_benchmark_db() -> (tempfile::TempDir, std::path::PathBuf) {
+fn setup_benchmark_db(compact: bool) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("bench_db.csv");
     let px_path = dir.path().join("bench_px.csv");
@@ -39,9 +39,15 @@ fn setup_benchmark_db() -> (tempfile::TempDir, std::path::PathBuf) {
         }
     }
 
+    let opt = OptimizationConfig {
+        compact_ranges: compact,
+        ..Default::default()
+    };
+
     let opts = CompilerOptions::new(&out_bin)
         .geo(Some(&db_path))
         .proxy(Some(&px_path))
+        .optimization(opt)
         .compression(false, false);
 
     compile(opts).unwrap();
@@ -49,29 +55,54 @@ fn setup_benchmark_db() -> (tempfile::TempDir, std::path::PathBuf) {
 }
 
 fn bench_lookups(c: &mut Criterion) {
-    let (_dir, bin_path) = setup_benchmark_db();
+    let (_dir, bin_path) = setup_benchmark_db(false);
     let reader = IpAtlasReader::open(&bin_path).unwrap();
+
+    let (_dir_c, bin_path_c) = setup_benchmark_db(true);
+    let reader_compact = IpAtlasReader::open(&bin_path_c).unwrap();
 
     let target_ip: Ipv4Addr = "1.0.1.50".parse().unwrap();
     let target_u32 = u32::from(target_ip);
 
+    // Generate 1024 realistic random pseudo-random IPs (hits & misses) to defeat L1 cache & branch predictor
+    let mut ip_seed: u32 = 0x12345678;
+    let mut random_ips = Vec::with_capacity(1024);
+    for _ in 0..1024 {
+        ip_seed = ip_seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        random_ips.push(ip_seed);
+    }
+
     let mut group = c.benchmark_group("lookup");
 
-    group.bench_function("lookup_u32 (zero-copy ref)", |b| {
+    // 1. Hot in-cache single IP lookup
+    group.bench_function("hot_l1_lookup_u32", |b| {
         b.iter(|| {
             let res = reader.lookup_u32(black_box(target_u32));
             black_box(res)
         });
     });
 
-    group.bench_function("lookup_ref (ip into)", |b| {
+    // 2. Realistic random lookup (DRAM/L2/L3 cache misses)
+    let mut idx = 0;
+    group.bench_function("random_cache_miss_lookup_u32", |b| {
         b.iter(|| {
-            let res = reader.lookup_ref(black_box(target_ip));
+            let ip = random_ips[idx % random_ips.len()];
+            idx = idx.wrapping_add(1);
+            let res = reader.lookup_u32(black_box(ip));
             black_box(res)
         });
     });
 
-    group.bench_function("lookup (owned strings)", |b| {
+    // 3. V4.1 Compact layout (8 bytes per range)
+    group.bench_function("compact_v4_1_lookup_u32", |b| {
+        b.iter(|| {
+            let res = reader_compact.lookup_u32(black_box(target_u32));
+            black_box(res)
+        });
+    });
+
+    // 4. Owned strings conversion
+    group.bench_function("owned_strings_lookup", |b| {
         b.iter(|| {
             let res = reader.lookup(black_box(target_ip));
             black_box(res)

@@ -2,7 +2,10 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use clap::{Args, Parser, Subcommand};
-use ipatlas::{compile, CompilerOptions, FeatureMask, IpAtlasReader, OptimizationConfig, Preset};
+use ipatlas::{
+    compile, CompilerOptions, FeatureMask, IpAtlasReader, OptimizationConfig, Preset,
+    RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD,
+};
 
 #[derive(Parser)]
 #[command(
@@ -42,7 +45,11 @@ struct CompileArgs {
     #[arg(long)]
     features: Option<String>,
 
-    /// Optimization flags/level: -O0, -O1, -O2, -O3, or comma-separated rules (coalesce, lossy-coords, normalize-strings)
+    /// Memory layout: standard (12B, V4) or compact (8B, V4.1)
+    #[arg(long, default_value = "standard")]
+    layout: String,
+
+    /// Optimization flags/level: -O0, -O1, -O2, -O3, or comma-separated rules (coalesce, lossy-coords, normalize-strings, compact-ranges)
     #[arg(short = 'O', long = "opt")]
     optimization: Vec<String>,
 
@@ -149,6 +156,10 @@ fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
 
     // Optimization flags
     let mut opt_config = OptimizationConfig::default();
+    if args.layout.to_lowercase() == "compact" || args.layout.to_lowercase() == "v4.1" {
+        opt_config.compact_ranges = true;
+    }
+
     for opt_arg in &args.optimization {
         opt_config
             .parse_arg(opt_arg)
@@ -162,9 +173,14 @@ fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
         anyhow::bail!("Compilation requires at least --geo or --proxy dataset input");
     }
 
+    let layout_label = if opt_config.compact_ranges {
+        "V4.1 Compact (8B)"
+    } else {
+        "V4 Standard (12B)"
+    };
     println!(
-        "Compiling IPAtlas Database (Feature Mask: {:#06x})...",
-        feature_mask.0
+        "Compiling IPAtlas Database [Layout: {} | Feature Mask: {:#06x}]...",
+        layout_label, feature_mask.0
     );
     println!("Optimization Configuration: {:?}", opt_config);
 
@@ -274,10 +290,22 @@ fn run_info(args: InfoArgs) -> anyhow::Result<()> {
     let size_mb = (file_size as f64) / (1024.0 * 1024.0);
     let reader = IpAtlasReader::open(&args.database)?;
 
+    let (version_name, rec_size) = if reader.is_compact() {
+        (
+            "IPAtlas Version 4.1 (V4-Compact, 8B/range)",
+            RECORD_SIZE_V4_COMPACT,
+        )
+    } else {
+        (
+            "IPAtlas Version 4 (Standard, 12B/range)",
+            RECORD_SIZE_V4_STANDARD,
+        )
+    };
+
     println!("Database:       {:?}", args.database);
-    println!("Format:         IPAtlas Version {}", reader.version());
+    println!("Format:         {}", version_name);
     println!("Records:        {}", format_num(reader.len()));
-    println!("Record Size:    {} bytes", ipatlas::RECORD_SIZE_V4);
+    println!("Record Size:    {} bytes", rec_size);
     println!("Profiles:       {}", format_num(reader.profile_count()));
     println!("Indexed Cities: {}", format_num(reader.city_count()));
     println!("Indexed Regions:{}", format_num(reader.region_count()));
@@ -303,7 +331,7 @@ fn run_bench(args: BenchArgs) -> anyhow::Result<()> {
         anyhow::bail!("Cannot benchmark empty database");
     }
 
-    // Generate random pseudo-random IPs deterministically without heavy rand crate
+    // Generate pseudo-random IPs deterministically
     let mut ip_seed: u32 = 0x811c9dc5;
     let mut test_ips = Vec::with_capacity(args.count);
     for _ in 0..args.count {

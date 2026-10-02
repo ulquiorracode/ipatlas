@@ -11,16 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Complete Rust Engine Rewrite**: Transitioned the entire IPAtlas codebase from the Python prototype (PoC) into a production-grade, memory-safe, systems-level library and CLI in Rust.
-- **Sub-100ns Lookup Performance**: Achieved **66.6 nanoseconds** per lookup (**~15,000,000 queries/second** single-threaded) via Criterion benchmarks — a **~100x throughput leap** over Python.
-- **Zero-Allocation Hot Path**: Added `GeoRecordRef<'a>` and `lookup_u32`, enabling true zero-copy inspection directly from kernel mmap page cache using `zerocopy`, `memmap2`, and SIMD `memchr`.
+- **Format V4.1 Compact (8-byte ranges)**: Added alternative compact layout (`RangeV4Compact`: `ip_from: u32, count: u16, profile_id: u16`) via `--layout compact` or `-O compact-ranges`. Shrinks range table size by **33.3%** and fits 8 records per 64-byte CPU cache line.
+- **100% Sound Safe Zero-Copy Reader**: Completely eliminated self-referential `unsafe &'static` slices in favor of verified `zerocopy::FromBytes` bounds and on-the-fly slice mapping from `memmap2::Mmap`.
+- **Sub-100ns Lookup Performance**: Benchmarked at **66.6 nanoseconds** per lookup (~**15,000,000 queries/second** single-threaded) via Criterion benchmarks — a **~100x throughput leap** over Python.
+- **Realistic Random & Cache-Miss Benchmarks**: Enhanced benchmark suite measuring cold random uniform IPv4 queries alongside hot L1 lookups.
 - **Compiler Optimization Pipeline (`-O`)**:
   - `-O0`: Raw pass-through intervals without coalescing.
-  - `-O1` (Default): Lossless cascade interval coalescing, profile deduplication, and empty string pruning.
+  - `-O1` (Default): Safe lossless cascade interval coalescing, profile deduplication, and empty string pruning.
   - `-O2`: `-O1` + case/whitespace string normalization.
-  - `-O3`: `-O2` + lossy coordinate quantization (~10km resolution) for maximum edge reduction.
-  - Fine-grained semantic flags: `-O coalesce`, `-O lossy-coords`, `-O normalize-strings`, `-O collapse-threats`.
-- **Streaming 1D-Sweep Line Compiler**: $O(N + M)$ single-pass sweep with $O(1)$ working memory, eliminating multi-gigabyte RAM allocation during large dataset compilation.
-- **Zero Data Loss Guarantee**: Fixed boundary sweep behavior so disjoint PX threat ranges outside Geo coverage are completely preserved.
+  - `-O3`: `-O2` + unbiased symmetric coordinate quantization (~10km resolution) for maximum edge reduction.
+  - Fine-grained semantic flags: `-O coalesce`, `-O lossy-coords`, `-O normalize-strings`, `-O compact-ranges`.
+- **Atomic File Persistence & Strict Validation**: Compiler writes to temporary files before atomic rename with disk synchronization (`sync_all`). `HeaderV4::validate` enforces strict non-overlapping sequential boundaries across profile and string blob tables.
+- **Streaming 1D-Sweep Line Compiler**: $O(N + M)$ single-pass input stream bounded by output table memory (~115 MB for 8M rows), eliminating multi-gigabyte Python heap explosion.
+- **Zero Data Loss Guarantee**: Preserves disjoint threat ranges from IP2Proxy outside IP2Location Geo coverage.
 - **Native Embedded Compression**: Direct in-process Zstandard compression (level 19) and Gzip compression via `zstd` and `flate2`, eliminating external subprocess binaries.
 - **Modular Cargo Architecture**: Reader-only client mode (`--no-default-features`) compiles in under 1 second with minimal dependencies (`memmap2`, `zerocopy`, `memchr`).
 - **Benchmark Suite & Tests**: Full integration test suite (`tests/`) and Criterion benchmarks (`benches/lookup_bench.rs`).
