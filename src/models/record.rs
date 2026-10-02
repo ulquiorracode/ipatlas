@@ -147,6 +147,52 @@ impl GeoFlags {
                 | Self::EPN))
             != 0
     }
+
+    /// Converts legacy Generation V4 packed flags to Generation V5 layout.
+    ///
+    /// Legacy V4 bitmask:
+    /// - `0x0001`: DATACENTER
+    /// - `0x0002`: RESIDENTIAL
+    /// - `0x0004`: MOBILE
+    /// - `0x0008`: COMMERCIAL
+    /// - `0x0010`: ORGANIZATION
+    /// - `0x0020`: GOVERNMENT
+    /// - `0x0040`: EDUCATION
+    /// - `0x0080`: CDN
+    /// - `0x0100`: SPAM
+    /// - `0x0200`: SCANNER
+    /// - `0x0400`: BOTNET
+    /// - `0x0800`: PROXY
+    #[inline]
+    pub fn from_v4(raw_v4: u16) -> Self {
+        let mut v5 = 0u16;
+        if (raw_v4 & 0x0001) != 0 {
+            v5 |= Self::DCH;
+        }
+        if (raw_v4 & 0x0002) != 0 {
+            v5 |= Self::RESIDENTIAL;
+        }
+        if (raw_v4 & 0x0004) != 0 {
+            v5 |= Self::MOBILE;
+        }
+        // Legacy 0x0008, 0x0010, 0x0020, 0x0040 were generic enterprise tags
+        if (raw_v4 & 0x0080) != 0 {
+            v5 |= Self::CDN;
+        }
+        if (raw_v4 & 0x0100) != 0 {
+            v5 |= Self::SPAM;
+        }
+        if (raw_v4 & 0x0200) != 0 {
+            v5 |= Self::SCANNER;
+        }
+        if (raw_v4 & 0x0400) != 0 {
+            v5 |= Self::BOTNET;
+        }
+        if (raw_v4 & 0x0800) != 0 {
+            v5 |= Self::ANY_PROXY | Self::VPN;
+        }
+        GeoFlags(v5)
+    }
 }
 
 /// Zero-copy borrowed view of a resolved IP lookup directly from mmap slices.

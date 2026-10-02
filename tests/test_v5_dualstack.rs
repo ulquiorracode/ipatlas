@@ -167,3 +167,21 @@ fn test_all_9_proxy_types_flags() {
 
     assert!(f.is_proxy());
 }
+
+#[test]
+fn test_legacy_v4_flags_conversion() {
+    // Legacy V4: DATACENTER (0x0001) and PROXY (0x0800)
+    let v4_datacenter = GeoFlags::from_v4(0x0001);
+    assert!(v4_datacenter.is_datacenter());
+    assert!(!v4_datacenter.is_vpn());
+
+    let v4_proxy = GeoFlags::from_v4(0x0800);
+    assert!(v4_proxy.is_proxy());
+    assert!(!v4_proxy.is_botnet());
+
+    // Legacy V4: BOTNET (0x0400) and SPAM (0x0100)
+    let v4_threats = GeoFlags::from_v4(0x0400 | 0x0100);
+    assert!(v4_threats.is_botnet());
+    assert!(v4_threats.is_spam());
+    assert!(!v4_threats.is_proxy());
+}

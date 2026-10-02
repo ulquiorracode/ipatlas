@@ -424,6 +424,14 @@ impl IpAtlasReader {
         )
     }
 
+    #[inline(always)]
+    fn decode_flags(&self, raw_flags: u16) -> GeoFlags {
+        match &self.header {
+            HeaderVariant::V4(_) => GeoFlags::from_v4(raw_flags),
+            HeaderVariant::V5(_) => GeoFlags(raw_flags),
+        }
+    }
+
     /// Lookup an IPv4 integer returning a borrowed view `GeoRecordRef`.
     #[inline]
     pub fn lookup_u32(&self, ip: u32) -> Option<GeoRecordRef<'_>> {
@@ -457,7 +465,7 @@ impl IpAtlasReader {
                 asn: prof.asn,
                 latitude: prof.latitude(),
                 longitude: prof.longitude(),
-                flags: GeoFlags(prof.flags),
+                flags: self.decode_flags(prof.flags),
             })
         } else {
             let ranges = self.ranges();
@@ -485,7 +493,7 @@ impl IpAtlasReader {
                 asn: prof.asn,
                 latitude: prof.latitude(),
                 longitude: prof.longitude(),
-                flags: GeoFlags(prof.flags),
+                flags: self.decode_flags(prof.flags),
             })
         }
     }
@@ -524,7 +532,7 @@ impl IpAtlasReader {
             asn: prof.asn,
             latitude: prof.latitude(),
             longitude: prof.longitude(),
-            flags: GeoFlags(prof.flags),
+            flags: self.decode_flags(prof.flags),
         })
     }
 
