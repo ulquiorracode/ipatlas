@@ -36,9 +36,9 @@ In version `0.4.0`, IPAtlas was completely rewritten from the ground up in **Rus
 - **Three-Dimensional Architecture**:
   - **Presets & Feature Masks**: Strip unneeded metadata to collapse intervals on the fly.
   - **Optimization Levels (`-O`)**: Semantic rules for cascade interval coalescing, string normalization, and symmetric coordinate quantization.
-  - **Memory Layout Options**:
-    - **V4 Standard (12B)**: `RangeV4` (`from: u32, to: u32, prof_id: u32`), universal 32-bit profile indexing.
-    - **V4.1 Compact (8B)**: `RangeV4Compact` (`from: u32, count: u16, prof_id: u16`), 8 records per 64B cache line (-33% size).
+  - **Generation V4 Layout Tiers**:
+    - **V4-Standard (12B)**: `RangeV4` (`from: u32, to: u32, prof_id: u32`), universal 32-bit profile indexing.
+    - **V4-Compact (8B)**: `RangeV4Compact` (`from: u32, count: u16, prof_id: u16`), 8 records per 64B cache line (-33% size).
 - **Streaming 1D-Sweep Compiler**: Single $O(N + M)$ streaming sweep merging IP2Location and IP2Proxy without loading whole input CSVs into RAM.
 - **Zero-Data-Loss Guarantee**: Preserves disjoint threat ranges occurring outside IP2Location Geo coverage.
 - **Universal Dataset Support**: Dynamic column detection for all IP2Location (`DB1`, `DB3`, `DB5`, `DB11`) and IP2Proxy (`PX1` – `PX12`) formats.
@@ -47,12 +47,16 @@ In version `0.4.0`, IPAtlas was completely rewritten from the ground up in **Rus
 
 ---
 
-## Storage Layouts: V4 Standard vs V4.1 Compact
+## Generation V4 Layouts: Standard vs Compact
 
-| Layout Target | Record Size | Fields | Best Used For | 7.95M Ranges Table Size |
+Within Generation V4, IPAtlas offers two layout tiers balancing footprint and capability:
+
+| Layout Tier | Record Size | Fields | Best Used For | 5.3M Production Table Size |
 | :--- | :--- | :--- | :--- | :--- |
-| **`V4 Standard`** *(Default)* | **12 bytes** | `ip_from: u32`, `ip_to: u32`, `profile_id: u32` | General purpose, unlimited profiles ($> 65k$), global datasets | **95.9 MB** |
-| **`V4.1 Compact`** (`--layout compact`) | **8 bytes** | `ip_from: u32`, `count: u16`, `profile_id: u16` | Edge proxies, L1/L2 cache locality (8 recs/64B line), $\le 65k$ profiles | **63.5 MB** *(**-33.3%**)* |
+| **`V4-Standard`** *(Default)* | **12 bytes** | `ip_from: u32`, `ip_to: u32`, `profile_id: u32` | General purpose, unlimited profiles ($> 65k$), global datasets | **61.1 MB** (raw) / 15.4 MB (ZST) |
+| **`V4-Compact`** (`--layout compact`) | **8 bytes** | `ip_from: u32`, `count: u16`, `profile_id: u16` | Edge proxies, L1/L2 cache locality (8 recs/64B line), $\le 65k$ profiles | **41.3 MB** (raw, **-32.4%**) / 11.5 MB (ZST) |
+
+> **Automated Protection**: If the number of unique normalized profiles exceeds `65,535` (`u16::MAX`), the compiler automatically falls back from `V4-Compact` to `V4-Standard` without data truncation.
 
 ---
 
@@ -156,14 +160,14 @@ Add `ipatlas` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ipatlas = "0.4.0"
+ipatlas = "0.4.1"
 ```
 
 For minimal embeddable reader setups without compiler dependencies:
 
 ```toml
 [dependencies]
-ipatlas = { version = "0.4.0", default-features = false }
+ipatlas = { version = "0.4.1", default-features = false }
 ```
 
 ### Example Usage
@@ -174,7 +178,7 @@ use ipatlas::IpAtlasReader;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reader = IpAtlasReader::open("ipatlas_full.bin")?;
 
-    // Zero-allocation borrowed lookup (66 ns)
+    // Zero-allocation borrowed lookup (399 ns on 5.3M production database)
     if let Some(record) = reader.lookup_ref("1.1.1.1".parse()?) {
         println!("Country: {}", record.country);
         println!("City:    {}", record.city);
@@ -186,6 +190,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+---
+
+## Known Limitations & Production Notes (v0.4.1)
+
+1. **IPv4 Only**: Generation V4 indexes 32-bit IPv4 address space. Full dual-stack IPv6 index table is scheduled for `v0.5.0`.
+2. **Dictionary Capacity**: `ProfileV4` dictionary indices for Region and ISP are 16-bit (`u16::MAX` = 65,535). Designed specifically for LITE and medium-scale datasets. If an index exceeds 65,535, it saturates safely with a warning. An unconstrained 32-byte `ProfileV4Extended` layout for massive Enterprise datasets is planned for `v0.5.0`.
+3. **Data Integrity**: Header validation enforces offset boundaries and section non-overlap. Bitrot protection via CRC32/XXH3 checksums within the header is planned for `v0.5.0` (external SHA-256 checksums are currently distributed alongside release archives).
 
 ---
 

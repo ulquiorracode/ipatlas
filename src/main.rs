@@ -196,6 +196,10 @@ fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
 
     let stats = compile(opts)?;
 
+    for warn in &stats.warnings {
+        eprintln!("Warning: {}", warn);
+    }
+
     let raw_mb = (stats.raw_size as f64) / (1024.0 * 1024.0);
     let gz_msg = stats
         .gz_size
@@ -209,15 +213,15 @@ fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
     let layout_msg = if stats.is_compact {
         if stats.records != stats.original_records {
             format!(
-                " [Layout: V4.1 Compact (8B) - {} ranges split into {} records]",
+                " [Layout: V4-Compact (8B) - {} ranges split into {} records]",
                 format_num(stats.original_records),
                 format_num(stats.records)
             )
         } else {
-            " [Layout: V4.1 Compact (8B)]".to_string()
+            " [Layout: V4-Compact (8B)]".to_string()
         }
     } else {
-        " [Layout: V4 Standard (12B)]".to_string()
+        " [Layout: V4-Standard (12B)]".to_string()
     };
 
     println!(
@@ -307,12 +311,12 @@ fn run_info(args: InfoArgs) -> anyhow::Result<()> {
 
     let (version_name, rec_size) = if reader.is_compact() {
         (
-            "IPAtlas Version 4.1 (V4-Compact, 8B/range)",
+            "Generation V4 (Compact Layout, 8B/range)",
             RECORD_SIZE_V4_COMPACT,
         )
     } else {
         (
-            "IPAtlas Version 4 (Standard, 12B/range)",
+            "Generation V4 (Standard Layout, 12B/range)",
             RECORD_SIZE_V4_STANDARD,
         )
     };

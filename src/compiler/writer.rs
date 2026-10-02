@@ -67,6 +67,7 @@ pub struct CompilationStats {
     pub zst_size: Option<u64>,
     pub elapsed_secs: f64,
     pub is_compact: bool,
+    pub warnings: Vec<String>,
     pub bin_path: PathBuf,
 }
 
@@ -84,6 +85,9 @@ pub struct DatabaseWriter {
     regions: StringPool,
     isps: StringPool,
     opt: OptimizationConfig,
+    warnings: Vec<String>,
+    has_region_overflow: bool,
+    has_isp_overflow: bool,
 }
 
 impl DatabaseWriter {
@@ -103,6 +107,9 @@ impl DatabaseWriter {
             regions: StringPool::new(),
             isps: StringPool::new(),
             opt,
+            warnings: Vec::new(),
+            has_region_overflow: false,
+            has_isp_overflow: false,
         }
     }
 
@@ -111,10 +118,36 @@ impl DatabaseWriter {
         for entry in entries {
             self.original_records += 1;
             let city_idx = self.cities.get_or_insert(&entry.city, self.opt.prune_empty);
-            let reg_idx =
-                self.regions
-                    .get_or_insert(&entry.region, self.opt.prune_empty) as u16;
-            let isp_idx = self.isps.get_or_insert(&entry.isp, self.opt.prune_empty) as u16;
+
+            let raw_reg_idx = self
+                .regions
+                .get_or_insert(&entry.region, self.opt.prune_empty);
+            let reg_idx = if raw_reg_idx <= u16::MAX as u32 {
+                raw_reg_idx as u16
+            } else {
+                if !self.has_region_overflow {
+                    self.has_region_overflow = true;
+                    self.warnings.push(format!(
+                        "Region dictionary size ({}) exceeded u16::MAX (65535). Saturated overflow to 0.",
+                        raw_reg_idx + 1
+                    ));
+                }
+                0
+            };
+
+            let raw_isp_idx = self.isps.get_or_insert(&entry.isp, self.opt.prune_empty);
+            let isp_idx = if raw_isp_idx <= u16::MAX as u32 {
+                raw_isp_idx as u16
+            } else {
+                if !self.has_isp_overflow {
+                    self.has_isp_overflow = true;
+                    self.warnings.push(format!(
+                        "ISP dictionary size ({}) exceeded u16::MAX (65535). Saturated overflow to 0.",
+                        raw_isp_idx + 1
+                    ));
+                }
+                0
+            };
 
             let prof = ProfileV4::new(
                 city_idx,
@@ -145,10 +178,10 @@ impl DatabaseWriter {
             // If profile_id exceeds u16::MAX in Compact mode, transparently fallback to Standard
             if let RangeStorage::Compact(vec) = &mut self.storage {
                 if profile_id > u16::MAX as u32 {
-                    eprintln!(
-                        "Warning: profile count ({}) exceeds u16::MAX (65535). Falling back from V4.1 Compact to V4 Standard layout.",
+                    self.warnings.push(format!(
+                        "Profile count ({}) exceeds u16::MAX (65535). Automatically falling back from V4-Compact to V4-Standard layout.",
                         profile_id + 1
-                    );
+                    ));
                     let mut std_vec = Vec::with_capacity(vec.len() + 1);
                     for r in vec.drain(..) {
                         std_vec.push(RangeV4::new(r.ip_from, r.ip_to(), r.profile_id as u32));
@@ -379,6 +412,7 @@ impl DatabaseWriter {
             zst_size,
             elapsed_secs: elapsed,
             is_compact,
+            warnings: self.warnings.clone(),
             bin_path: path.to_path_buf(),
         })
     }

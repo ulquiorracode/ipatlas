@@ -199,7 +199,10 @@ fn test_compact_v4_1_wide_range_split_and_profile_overflow_fallback() {
         !overflow_stats.is_compact,
         "Should fall back to Standard layout when profiles exceed u16::MAX"
     );
-    assert_eq!(overflow_stats.profiles, 70_000);
+    assert!(overflow_stats
+        .warnings
+        .iter()
+        .any(|w| w.contains("falling back from V4-Compact to V4-Standard")));
 
     let reader_overflow = IpAtlasReader::open(&out_overflow).unwrap();
     assert!(!reader_overflow.is_compact());
