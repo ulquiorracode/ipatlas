@@ -108,6 +108,26 @@ fn bench_lookups(c: &mut Criterion) {
         });
     });
 
+    // 5. Experimental V5-Succinct Elias-Fano Bitvector lookup
+    let succinct_table = {
+        use ipatlas::compiler::succinct::SuccinctIntervalTable;
+        use ipatlas::models::{ProfileV4, RangeV4};
+        let ranges: Vec<RangeV4> = reader
+            .ranges()
+            .iter()
+            .map(|r| RangeV4::new(r.ip_from, r.ip_to, r.profile_id))
+            .collect();
+        let profiles: Vec<ProfileV4> = reader.profiles().to_vec();
+        SuccinctIntervalTable::build(&ranges, profiles)
+    };
+
+    group.bench_function("succinct_elias_fano_lookup", |b| {
+        b.iter(|| {
+            let res = succinct_table.lookup(black_box(target_u32));
+            black_box(res)
+        });
+    });
+
     group.finish();
 }
 
