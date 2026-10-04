@@ -97,18 +97,28 @@ impl IpAtlasReader {
                     .map_err(|_| ReaderError::Corrupted("Failed to parse V5 header bytes"))?;
 
                 if h.is_embedded_zstd() {
-                    let decompressed_payload = zstd::stream::decode_all(&mmap[HEADER_SIZE_V5..])
-                        .map_err(|e| ReaderError::Decompression(e.to_string()))?;
-                    let total_uncompressed_len =
-                        (HEADER_SIZE_V5 + decompressed_payload.len()) as u64;
-                    h.validate(total_uncompressed_len)
-                        .map_err(ReaderError::Corrupted)?;
+                    #[cfg(feature = "embedded-zstd")]
+                    {
+                        let decompressed_payload =
+                            zstd::stream::decode_all(&mmap[HEADER_SIZE_V5..])
+                                .map_err(|e| ReaderError::Decompression(e.to_string()))?;
+                        let total_uncompressed_len =
+                            (HEADER_SIZE_V5 + decompressed_payload.len()) as u64;
+                        h.validate(total_uncompressed_len)
+                            .map_err(ReaderError::Corrupted)?;
 
-                    let mut full_buf =
-                        Vec::with_capacity(HEADER_SIZE_V5 + decompressed_payload.len());
-                    full_buf.extend_from_slice(&mmap[..HEADER_SIZE_V5]);
-                    full_buf.extend_from_slice(&decompressed_payload);
-                    (HeaderVariant::V5(h), StorageBuffer::Memory(full_buf))
+                        let mut full_buf =
+                            Vec::with_capacity(HEADER_SIZE_V5 + decompressed_payload.len());
+                        full_buf.extend_from_slice(&mmap[..HEADER_SIZE_V5]);
+                        full_buf.extend_from_slice(&decompressed_payload);
+                        (HeaderVariant::V5(h), StorageBuffer::Memory(full_buf))
+                    }
+                    #[cfg(not(feature = "embedded-zstd"))]
+                    {
+                        return Err(ReaderError::Decompression(
+                            "rebuild with embedded-zstd".to_string(),
+                        ));
+                    }
                 } else {
                     h.validate(file_len).map_err(ReaderError::Corrupted)?;
                     (HeaderVariant::V5(h), StorageBuffer::Mmap(mmap))

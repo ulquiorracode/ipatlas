@@ -664,7 +664,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 [[package]]
 name = "stitch-rs"
 version = "0.1.0"
-source = "git+https://github.com/ulquiorracode/stitch-rs.git?branch=main#30b0fe64a0eed2f41c668618b15586ed865433ac"
+source = "git+https://github.com/ulquiorracode/stitch-rs.git?rev=30b0fe64a0eed2f41c668618b15586ed865433ac#30b0fe64a0eed2f41c668618b15586ed865433ac"
 
 [[package]]
 name = "strsim"

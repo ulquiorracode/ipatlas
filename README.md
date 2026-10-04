@@ -56,10 +56,14 @@ IPAtlas provides three distinct layout tiers designed around the trade-off betwe
 | **MaxMind MMDB** *(Baseline)* | Industry Standard | ~22 bytes (tree) | **115.0 MB** | $6.50 \times H_{\text{raw}}$ | **1,100 ns** | **$126,500\text{ MB}\cdot\text{ns}$** (1.0x baseline) | Reference |
 | **`V4/V5-Standard`** *(Default)* | **Production** | 12 bytes | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **66.7 ns** | **$4,075\text{ MB}\cdot\text{ns}$** | **31.0x more efficient** |
 | **`V4/V5-Compact`** (`--layout compact`) | **Production** | 8 bytes | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **60.9 ns** | **$2,515\text{ MB}\cdot\text{ns}$** *(Peak Hardware Sweet Spot)* | **50.3x more efficient** |
-| **`V5-Succinct`** *(Shannon Bound)* | **Experimental** | ~2.8 bytes (E-F) | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
+| **`V5-Succinct`** *(Shannon Bound)* | **Experimental** *(Non-Prod)* | ~2.8 bytes (E-F) | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
 
-> **Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$)**: Lower is better. While `V5-Succinct` reaches the absolute mathematical Shannon limit of in-memory compression (17.8 MB), `V4-Compact` achieves the global architectural maximum: 8-byte intervals fit 8 records per 64-byte L1 CPU cache line, driving query latency down to **60.9 ns** and delivering **50x higher efficiency than MaxMind MMDB**.
-
+> **Benchmark Hardware & Testbed**: Measured on x86_64 CPU (3.60 GHz base, AVX2 enabled, 32KB L1d / 512KB L2 cache) on Windows 11 / Ubuntu 22.04 LTS kernel 6.5 using Criterion.rs 0.5.1 with 1M warmups and 1024 pseudo-randomized addresses. Evaluated against global 5,318,878 post-coalesced interval catalog (IP2Location DB5 + IP2Proxy PX10 snapshot; uncoalesced raw multi-provider sources span ~7.9M intervals, reduced by `-O1` coalescing).
+>
+> **Experimental Designation**: `V5-Succinct` is strictly an **experimental research tier** for extreme memory-constrained devices (16MB routers). For all production services and edge reverse proxies, **`V4/V5-Compact`** is the recommended default.
+>
+> **Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$)**: Lower is better. While `V5-Succinct` reaches the absolute mathematical Shannon limit of in-memory compression (17.8 MB), `V4-Compact` achieves the global architectural maximum: 8-byte intervals fit 8 records per 64-byte L1 CPU cache line, driving query latency down to **60.9 ns** and delivering **50.3x higher efficiency than MaxMind MMDB**.
+>
 > **Automated Protection**: If the number of unique normalized profiles exceeds `65,535` (`u16::MAX`), the compiler automatically falls back from `V4-Compact` to `V4-Standard` without data truncation.
 
 ---

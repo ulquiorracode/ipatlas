@@ -15,19 +15,20 @@ memmap2 = "0.9"
 zerocopy = { version = "0.8", features = ["derive"] }
 memchr = "2.7"
 thiserror = "2.0"
-stitch-rs = { git = "https://github.com/ulquiorracode/stitch-rs.git", branch = "main", default-features = false }
+stitch-rs = { git = "https://github.com/ulquiorracode/stitch-rs.git", rev = "30b0fe64a0eed2f41c668618b15586ed865433ac", default-features = false }
 rayon = { version = "1.10", optional = true }
 clap = { version = "4.5", features = ["derive"], optional = true }
 anyhow = { version = "1.0", optional = true }
-zstd = "0.14.0"
+zstd = { version = "0.14.0", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3.17"
 
 [features]
-default = ["compiler", "cli"]
-compiler = ["dep:rayon", "dep:anyhow"]
+default = ["compiler", "cli", "embedded-zstd"]
+embedded-zstd = ["dep:zstd"]
+compiler = ["dep:rayon", "dep:anyhow", "embedded-zstd"]
 cli = ["compiler", "dep:clap", "dep:rayon"]
 
 [[bin]]

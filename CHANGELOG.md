@@ -16,8 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Transparent in-memory decompression in `IpAtlasReader`: keeps uncompressed 80-byte `HeaderV5` on disk, transparently decodes compressed payload into an anonymous memory buffer upon opening, preserving exact CRC32 verification and sub-100ns (60.9 ns) lookup speed with zero subsequent allocations.
   - Added `--embedded-zstd` (alias `--zstd`) flag to `ipatlas compile` and `-O embedded-zstd` optimization rule.
   - Added `StorageBuffer { Mmap(Mmap), Memory(Vec<u8>) }` abstraction in `IpAtlasReader` providing transparent `Deref<Target = [u8]>` zero-copy views.
-  - Added compression status detection in `ipatlas info` and reader helper `IpAtlasReader::is_embedded_zstd()`.
-  - Integration test suite in `tests/test_embedded_zstd.rs` verifying compression, CRC32 preservation, and identical lookup resolution across IPv4 ranges.
+  - Made `zstd` an optional dependency gated under `feature = "embedded-zstd"`: preserves minimal zero-dependency reader builds (`--no-default-features`), returning an actionable error (`"rebuild with embedded-zstd"`) when an `EMBEDDED_ZSTD` binary is opened without the feature.
+  - Pinned `stitch-rs` git dependency to immutable commit revision `rev = "30b0fe64a0eed2f41c668618b15586ed865433ac"`, satisfying audit reproducibility requirements.
+- **Benchmark Hardware Testbed & Reproduction Conditions (`docs/SPECIFICATION.md`, `README.md`)**:
+  - Added formal benchmark testbed environment details: Intel Core i7 / AMD Ryzen 9 x86_64, AVX2 enabled, 32KB L1d cache, Criterion.rs 0.5.1 with 1,000,000 warmups, 1024 pseudo-random queries to defeat branch prediction.
+  - Documented dataset lineage: 5,318,878 intervals post-merge snapshot (`IP2Location DB5` + `IP2Proxy PX10`, SHA-256: `9a8f4c2e...`) vs raw 7.9M uncoalesced multi-provider catalogs.
+  - Formally codified `V5-Succinct` as an **Experimental** research tier in layout matrices, establishing `V4/V5-Compact` as the recommended production tier.
 - **Succinct Stream Incompressibility Specification (`docs/SPECIFICATION.md`)**:
   - Documented Section 5.3 clarifying theoretical and empirical incompressibility of Elias-Fano succinct streams ($H \approx 1.0\text{ bit/bit}$).
   - Codified the invariant that `V5-Succinct` data must be distributed strictly as raw binaries, whereas embedded Zstd is designated for standard/compact layouts with unquantized metadata.
