@@ -473,6 +473,18 @@ impl IpAtlasReader {
         Ok(())
     }
 
+    /// Returns the underlying database header variant.
+    #[inline(always)]
+    pub fn header(&self) -> HeaderVariant {
+        self.header
+    }
+
+    /// Returns the raw memory-mapped buffer of the database.
+    #[inline(always)]
+    pub fn raw_bytes(&self) -> &[u8] {
+        &self.mmap
+    }
+
     /// Total count of all IP interval ranges (IPv4 + IPv6).
     #[inline(always)]
     pub fn len(&self) -> usize {

@@ -94,25 +94,30 @@ ipatlas/
 ## 3. Core Architectural Invariants
 
 ### 1. Zero-Copy Kernel Memory Mapping
+
 - Slices of interval records (`[RangeV4]` or `[RangeV4Compact]`) are mapped directly from the operating system's page cache using `memmap2`.
 - Memory representations derive `zerocopy` traits (`FromBytes`, `IntoBytes`, `Immutable`, `KnownLayout`). No heap allocations occur during lookup.
 - Data structures are 4-byte or 8-byte aligned, completely avoiding unaligned hardware traps.
 
 ### 2. 1D Sweep-Line Interval Partitioning
+
 - The IPv4 space ($[0, 2^{32}-1]$) and IPv6 space are represented as sorted, non-overlapping, contiguous intervals.
 - The compiler streams IP2Location and IP2Proxy inputs simultaneously with two cursors in $O(N + M)$ time and $O(1)$ intermediate memory.
 - Overlapping geo and threat intervals are split at boundaries, creating uniform profile IDs for every sub-range without data loss.
 
 ### 3. Profile Deduplication & Normalization
+
 - Repeated metadata tuples (e.g. all IPs belonging to the same City + ASN + Threat combination) resolve to an identical 32-bit `prof_id`.
 - The profile table stores compact indices into a contiguous length-prefixed UTF-8 string pool.
 
 ### 4. Layout Tiers
+
 1. **`V4-Standard` (12 bytes/interval)**: `from: u32, to: u32, prof_id: u32`. Universal 32-bit profile index capacity.
 2. **`V4-Compact` (8 bytes/interval)**: `from: u32, count: u16, prof_id: u16`. Aligns exactly 8 records per 64-byte CPU cache line. Reduces memory footprint by 32.4% while maintaining sub-100ns lookup latency.
 3. **`V5-Succinct` (Elias-Fano)**: Monotone prefix bitvector encoding reaching ~100% of the Shannon entropy floor (~17.8 MB active RAM) with bit-level rank/select lookups.
 
 ### 5. Monomorphic U-Cycle Pipeline (`stitch-rs`)
+
 - High-level queries pass through a compile-time monomorphic execution pipeline (`stitch-rs`).
 - **Descent Phase**: Bogon and private network ranges (RFC 1918, Loopback) short-circuit in $\approx 1.5\text{ ns}$ without accessing the memory-mapped file or DRAM.
 - **Ascent Phase**: Threat policies (rejecting proxies, datacenter IPs, or malicious ASNs) execute before returning outcomes to the caller.

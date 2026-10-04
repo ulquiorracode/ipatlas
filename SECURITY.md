@@ -30,6 +30,7 @@ If you discover a security vulnerability in IPAtlas, please report it privately:
 ### What to Include in Your Report
 
 To help us triage and resolve the issue quickly, please provide:
+
 - A clear description of the vulnerability and its potential impact.
 - Affected component(s) (e.g., Reader Engine, mmap bounds verification, Embedded Zstd decompression).
 - A minimal proof-of-concept database file (`.bin`) or code snippet triggering the issue.
@@ -40,6 +41,7 @@ To help us triage and resolve the issue quickly, please provide:
 ## Scope of Security Concerns
 
 We are particularly interested in reports concerning:
+
 - **Out-of-Bounds Memory Access**: Flaws allowing crafted database binary files to read outside memory-mapped boundaries.
 - **Decompression Bombs (DoS)**: Unbounded memory allocation during embedded Zstd or stream decompression.
 - **Header Parsing Exploits**: Integer overflows or corrupted offsets in section header parsing causing undefined behavior or crashes.

@@ -76,6 +76,7 @@ Ensure you have installed:
 
 1. **Rust 1.74+** (MSRV 1.74, see `rust-version` in `Cargo.toml`).
 2. **Cargo tools** (optional, recommended):
+
    ```bash
    cargo install cargo-deny cargo-audit
    ```
@@ -116,6 +117,7 @@ cargo test --benches
 ### 3. Binary Format Changes
 
 Any binary specification or header layout change requires:
+
 1. Updating [`docs/SPECIFICATION.md`](docs/SPECIFICATION.md).
 2. Updating [`CHANGELOG.md`](CHANGELOG.md).
 3. Providing backward-compatibility validation or migration documentation in `docs/`.
@@ -123,6 +125,7 @@ Any binary specification or header layout change requires:
 ### 4. Benchmark Reproducibility
 
 Performance claims must include exact reproduction parameters:
+
 - Hardware testbed (CPU model, clock frequency, OS).
 - Dataset hash and record count.
 - Benchmark command and harness (`cargo bench --bench lookup_bench`).
@@ -133,13 +136,16 @@ Performance claims must include exact reproduction parameters:
 ## Pull Request Workflow
 
 1. Create a branch from `dev`:
+
    ```bash
    git checkout dev
    git pull origin dev
    git checkout -b feat/my-optimization
    ```
+
 2. Make your edits following English code artifact standards.
 3. Verify local quality gates:
+
    ```bash
    cargo fmt --all -- --check
    cargo clippy --all-targets --all-features -- -D warnings
@@ -147,4 +153,5 @@ Performance claims must include exact reproduction parameters:
    cargo check --no-default-features
    cargo doc --no-deps --all-features
    ```
+
 4. Push and submit a Pull Request targeting `dev` using the [Pull Request Template](.github/PULL_REQUEST_TEMPLATE.md).

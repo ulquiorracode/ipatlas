@@ -41,11 +41,13 @@
 ## Background
 
 GeoIP and threat intelligence datasets (e.g. MaxMind MMDB, IP2Location, IP2Proxy) traditionally rely on radix trees or hierarchical binary trees. While flexible, tree traversals suffer from:
+
 1. **CPU Pointer Chasing**: Multiple random cache line fetches per lookup ($O(\log N)$ or 24–32 tree steps).
 2. **Heavy Allocation Footprint**: Deserializing tree nodes into heap structures consumes hundreds of megabytes of RAM.
 3. **Disjoint Coverage**: Merging geo metadata with threat datasets requires multi-database joins during runtime packet evaluation.
 
 **IPAtlas** solves these fundamental bottlenecks by:
+
 1. **Streaming 1D-Sweep Offline Compiler**: Merges disjoint datasets in a single $O(N + M)$ linear pass, resolving overlaps into contiguous intervals.
 2. **Zero-Copy Memory-Mapped Flat Storage**: Slices verified and referenced directly from kernel page cache via `zerocopy` and `memmap2` without self-referential pointers or heap allocations.
 3. **Sub-100ns Lookups**: Delivers **60.9 ns** hot-L1 latency and **140 ns** cold DRAM access—**up to 50x faster than MaxMind MMDB**.
@@ -106,22 +108,23 @@ ipatlas/
 
 IPAtlas provides distinct layout tiers designed around the trade-off between memory footprint, zero-copy alignment, and hardware cache efficiency:
 
-| Layout Tier | Status | Record Size | 5.3M Table RAM | Shannon Ratio | Query Latency (Hot L1 / DRAM) | Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$) | vs MaxMind MMDB |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **MaxMind MMDB** *(Baseline)* | Industry Standard | ~22 bytes (tree) | **115.0 MB** | $6.50 \times H_{\text{raw}}$ | **1,100 ns** *(5.3M table)* | **$126,500\text{ MB}\cdot\text{ns}$** (1.0x baseline) | Reference |
-| **`V4/V5-Standard (AoS)`** | **Production** | 12 bytes | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **66.7 ns** *(5.3M L1)* | **$4,075\text{ MB}\cdot\text{ns}$** | **31.0x more efficient** |
-| **`V4/V5-Compact (AoS)`** | **Production** | 8 bytes | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **60.9 ns** *(5.3M L1)* / **70.8 ns** *(10k)* | **$2,515\text{ MB}\cdot\text{ns}$** | **50.3x more efficient** |
-| **`V4/V5-Compact (SoA)`** (`--layout soa`) | **Production (Opt)** | 8 bytes (columnar) | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **15.4 ns** *(10k L1 cache-fit)* | **$636\text{ MB}\cdot\text{ns}$** *(Peak L1 Cache Sweet Spot)* | **198.8x more efficient** |
-| **Flags-Only Fast Path** | **Production** | Zero-allocation | N/A | N/A | **18.5 ns** *(10k L1)* | N/A | **Edge Firewall Mode** |
-| **`V5-Succinct`** *(Shannon Bound)* | **Experimental** *(Non-Prod)* | ~2.8 bytes (E-F) | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** *(5.3M table)* | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
+| Layout Tier | Status | Record Size | 5.3M Table RAM | Shannon Ratio | 5.3M Full Snapshot Latency | 10k L1-Fit Latency | Multi-Thread Throughput (16T) | Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$) | vs MaxMind MMDB |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **MaxMind MMDB** *(Baseline)* | Industry Standard | ~22 bytes (tree) | **115.0 MB** | $6.50 \times H_{\text{raw}}$ | **1,100 ns** *(DRAM)* | N/A | ~5.8M QPS | **$126,500\text{ MB}\cdot\text{ns}$** (1.0x baseline) | Reference |
+| **`V4/V5-Standard (AoS)`** | **Production** | 12 bytes | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **218.4 ns** *(DRAM)* | **66.7 ns** | ~48.2M QPS | **$13,344\text{ MB}\cdot\text{ns}$** | **9.5x more efficient** |
+| **`V4/V5-Compact (AoS)`** | **Production** | 8 bytes | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **205.2 ns** *(DRAM)* | **67.3 ns** | **62.8M QPS** | **$8,474\text{ MB}\cdot\text{ns}$** | **14.9x more efficient** |
+| **`V4/V5-Compact (SoA)`** (`--layout soa`) | **Production (Opt)** | 8 bytes (columnar) | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **193.0 ns** *(DRAM)* | **60.3 ns** *(15.4ns warm)* | **64.6M QPS** | **$7,970\text{ MB}\cdot\text{ns}$** | **15.9x more efficient** |
+| **Flags-Only Fast Path** | **Production** | Zero-allocation | N/A | N/A | **85.3 ns** *(DRAM)* | **16.9 ns** | **120.0M+ QPS** | N/A | **Edge Firewall Mode** |
+| **`V5-Succinct`** *(Shannon Bound)* | **Experimental** *(Non-Prod)* | ~2.8 bytes (E-F) | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** *(DRAM)* | **297.7 ns** | N/A | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
 
-> **Benchmark Hardware & Testbed**: Measured on x86_64 CPU (3.60 GHz base, AVX2 enabled, 32KB L1d / 512KB L2 cache) on Windows 11 / Ubuntu 22.04 LTS kernel 6.5 using Criterion.rs 0.5.1 with 1M warmups and 1024 pseudo-randomized addresses. Evaluated against global 5,318,878 post-coalesced interval catalog (IP2Location DB5 + IP2Proxy PX10 snapshot; uncoalesced raw multi-provider sources span ~7.9M intervals, reduced by `-O1` coalescing).
+> **Comprehensive Analysis**: For in-depth empirical testbed analysis, cache-line breakdown, and detailed Criterion traces, see [**`docs/BENCHMARKS.md`**](docs/BENCHMARKS.md).
 >
-> **Dataset Size Methodology Notice**:
-> - Full table measurements (**60.9 ns / 66.7 ns / 353.8 ns**) reflect the complete **5,318,878 production dataset** spanning 41–61 MB of memory.
-> - The **15.4 ns** SoA and **18.5 ns** Flags-Only measurements are derived from the synthetic **10,000 interval benchmark** in `benches/lookup_bench.rs`, where the 40 KB `soa_ip_from` slice fits almost entirely into the 32 KB L1d / L2 cache hierarchy. On the full 5.3M production snapshot (~21 MB `ip_from` array), binary search traverses DRAM cache lines and latency is bounded by memory bus round-trips. AoS remains the battle-tested production default until full-snapshot SoA benchmarks are finalized.
+> **Methodology & L1 Cache-Fit vs DRAM Reality**:
+> - **5.3M Full Snapshot**: Lookups across the complete 5,318,878 production database (41–61 MB). At this scale, the 21.3 MB search key column exceeds the CPU L1/L2 cache and memory bus round-trips ($t_{\text{CAS}}$) bound binary search latency (~193–205 ns single-threaded). SoA yields a steady ~6% single-threaded improvement and scales to **64.5M QPS** across 16 threads.
+> - **10k L1-Fit Synthetic Regime**: In microbenchmarks where the entire range table fits within 32 KB L1d / L2 cache, binary search achieves **15.4–17.0 ns** without touching DRAM.
+> - **Flags-Only & Threat Predicates**: Bypasses string table resolution and heap allocation entirely, delivering **85.3 ns on 5.3M DRAM** and **16.1–16.9 ns in L1 cache**.
 >
-> **Experimental Designation**: `V5-Succinct` is strictly an **experimental research tier** for extreme memory-constrained devices (16MB routers). For all production services and edge reverse proxies, **`V4/V5-Compact (AoS)`** is the recommended default.
+> **Experimental Designation**: `V5-Succinct` is strictly an **experimental research tier** for extreme memory-constrained devices (16MB routers). For all production services and edge reverse proxies, **`V4/V5-Compact (AoS)`** or **`V4/V5-Compact (SoA)`** is the recommended default.
 >
 > **Automated Protection**: If the number of unique normalized profiles exceeds `65,535` (`u16::MAX`), the compiler automatically falls back from `Compact` to `Standard` without data truncation.
 
@@ -137,6 +140,7 @@ IPAtlas provides a compiler optimization pipeline analogous to C/Rust compilers:
 - **`-O3`**: `-O2` + symmetric coordinate quantization (~10km resolution, unbiased around zero), maximizing interval coalescing ratio for resource-constrained edge routers.
 
 Fine-grained semantic flags are also supported:
+
 ```sh
 ipatlas compile -O coalesce,lossy-coords,normalize-strings,compact-ranges ...
 ```
@@ -150,6 +154,7 @@ In information theory, the **Shannon entropy limit** defines the absolute lower 
 $$H(X) = - \sum_{i} P(x_i) \log_2 P(x_i)$$
 
 For the combined global IPv4 space ($2^{32} \approx 4.29 \times 10^9$ addresses), data is naturally partitioned into disjoint CIDR / routing intervals with shared metadata attributes:
+
 - **Interval Boundary Entropy**: Specifying the cut-points of $5.3 \times 10^6$ intervals across the 32-bit integer universe via optimal monotonic difference bounds (Elias-Fano representation: $N \lceil \log_2(U/N) \rceil + 2N$) requires $\approx 11.2\text{ bits/record} \approx \mathbf{7.4\text{ MB}}$.
 - **Profile Alphabet Entropy**: Choosing among $\approx 50{,}000$ unique normalized profiles (Country, Region, City, ASN, Flags) requires $\lceil \log_2(50{,}000) \rceil \approx 15.6\text{ bits/record} \approx \mathbf{10.3\text{ MB}}$.
 - **Theoretical Minimum ($H_{\text{raw}}$)**: The absolute theoretical Shannon floor for lossless random-access interval topology is $\approx \mathbf{17.7\text{ MB}}$.
@@ -172,15 +177,19 @@ For the combined global IPv4 space ($2^{32} \approx 4.29 \times 10^9$ addresses)
 Ensure the following tools are installed:
 
 1. **Rust Toolchain (1.74+)**:
+
    ```bash
    rustup default stable
    ```
+
 2. **Build from source**:
+
    ```bash
    git clone https://github.com/ulquiorracode/ipatlas.git
    cd ipatlas
    cargo build --release
    ```
+
    The binary is output to `./target/release/ipatlas`.
 
 ---
@@ -338,6 +347,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Contributing
 
 We welcome contributions! Please review:
+
 1. [Code of Conduct](CODE_OF_CONDUCT.md)
 2. [Contribution Guidelines](CONTRIBUTING.md)
 3. Follow [Conventional Commits](https://www.conventionalcommits.org/) and English code artifact rules.
