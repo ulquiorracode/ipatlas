@@ -108,7 +108,7 @@ fn format_num<T: std::fmt::Display>(n: T) -> String {
     let bytes = s.as_bytes();
     let len = bytes.len();
     for (i, &b) in bytes.iter().enumerate() {
-        if i > 0 && (len - i).is_multiple_of(3) && b.is_ascii_digit() {
+        if i > 0 && (len - i) % 3 == 0 && b.is_ascii_digit() {
             out.push(',');
         }
         out.push(b as char);

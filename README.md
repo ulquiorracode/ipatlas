@@ -1,55 +1,110 @@
 # IPAtlas
 
-[![CI](https://github.com/ulquiorracode/ipatlas/actions/workflows/ci.yml/badge.svg)](https://github.com/ulquiorracode/ipatlas/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Language: Rust](https://img.shields.io/badge/Language-Rust-orange.svg)](https://www.rust-lang.org/)
+<!-- Project Status & Metrics -->
+![Status](https://img.shields.io/badge/status-production--ready-brightgreen?logo=rust) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![CI](https://github.com/ulquiorracode/ipatlas/actions/workflows/ci.yml/badge.svg)](https://github.com/ulquiorracode/ipatlas/actions/workflows/ci.yml)  
+<!-- Repository & Community -->
+![GitHub Created At](https://img.shields.io/github/created-at/ulquiorracode/ipatlas?logo=github) [![Last Commit](https://img.shields.io/github/last-commit/ulquiorracode/ipatlas)](https://github.com/ulquiorracode/ipatlas/commits/main) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md) ![GitHub contributors](https://img.shields.io/github/contributors/ulquiorracode/ipatlas?logo=github) [![standard-readme compliant](https://img.shields.io/badge/readme%20style-standard-brightgreen.svg?logo=readme)](https://github.com/RichardLitt/standard-readme)  
+<!-- Tech Stack & Targets -->
+[![Rust: 2021 Edition](https://img.shields.io/badge/rust-2021_edition-orange.svg?logo=rust&logoColor=orange)](https://doc.rust-lang.org/edition-guide/rust-2021/) [![MSRV: 1.74](https://img.shields.io/badge/MSRV-1.74-blue.svg)](https://www.rust-lang.org/) ![Targets: x86_64-windows | x86_64-linux | aarch64-macos](https://img.shields.io/badge/targets-windows%20%7C%20linux%20%7C%20macos-lightgray.svg?logo=linux&logoColor=black)
 
-**IPAtlas** is an ultra-fast, zero-copy binary GeoIP and Proxy/VPN threat intelligence compiler and reader written in Rust.
+> Ultra-fast zero-copy binary GeoIP and Proxy/VPN threat database compiler and reader in Rust.
 
-It fuses disjoint Geolocation (IP2Location) and Threat/Proxy datasets (IP2Proxy) into a unified, flat binary search table designed for edge proxies, high-performance firewalls, gamedev servers, and sub-microsecond packet filters.
-
----
-
-## Architectural Evolution: From PoC to Systems Engine
-
-IPAtlas originally began as a Python prototype (*archived in `poc/python/`*), which validated the core data models: 1D sweep interval alignment, profile normalization (V4), and cascade coalescing.
-
-In version `0.4.0`, IPAtlas was completely rewritten from the ground up in **Rust** as a production systems-level tool and library:
-
-| Characteristic | Python Prototype (PoC) | Rust Systems Engine (v0.4.0) | Improvement |
-| :--- | :--- | :--- | :--- |
-| **Hot L1 Lookup Latency** | 6.07 – 8.33 µs | **66.6 ns** (`0.066 µs`) | **~100x faster** |
-| **Realistic Random Latency (DRAM/L3)** | 7.50 – 9.20 µs | **120 – 180 ns** | **~50x faster** |
-| **Peak Throughput (1 Thread)** | ~120,000 – 164,000 QPS | **~15,000,000 QPS** | **~100x higher** |
-| **Compiler Working Memory** | Several GBs (Python object heap) | **Bounded by output table** (~115 MB for 8M rows) | **Zero risk of OOM** |
-| **Memory Access** | `struct.unpack` copies | **True Zero-Copy** (`zerocopy` + `mmap`, 100% safe) | **Zero heap allocations** |
-| **String Resolution** | Iterative tuple decoding | **SIMD `memchr` slice scan** | **Instant slice views** |
-| **File I/O Safety** | In-place overwrite (crash-vulnerable) | **Atomic write-then-rename + sync** | **Crash-safe persistence** |
-| **Compression** | External shell subprocess | **Native in-process `zstd` (level 19) + gzip** | **Deterministic & portable** |
+**IPAtlas** is a production systems-level library and CLI tool written in Rust. It fuses disjoint Geolocation (IP2Location) and Threat/Proxy datasets (IP2Proxy) into a unified, flat binary search table designed for edge proxies, high-performance firewalls, game servers, and sub-microsecond packet filters.
 
 ---
 
-## Key Highlights
+## Table of Contents
 
-- **Sub-100ns Lookups**: Benchmarked at **66.6 ns** hot cache and **~140 ns** cold/random DRAM access on standard modern CPUs.
+- [Background](#background)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Generation V4/V5 Layout Tiers & Efficiency Matrix](#generation-v4v5-layout-tiers--efficiency-matrix)
+- [Compiler Optimization Flags (`-O`)](#compiler-optimization-flags--o)
+- [Theoretical Limits & Shannon Entropy Analysis](#theoretical-limits--shannon-entropy-analysis)
+- [Install & Prerequisites](#install--prerequisites)
+- [CLI Usage](#cli-usage)
+  - [1. Compile Datasets](#1-compile-datasets)
+  - [2. Lookup an IP Address](#2-lookup-an-ip-address)
+  - [3. Inspect Database Metadata](#3-inspect-database-metadata)
+  - [4. Benchmark Throughput](#4-benchmark-throughput)
+- [Rust Library API](#rust-library-api)
+  - [Basic Zero-Allocation Lookup](#basic-zero-allocation-lookup)
+  - [Monomorphic U-Cycle Pipeline (`stitch-rs`)](#monomorphic-u-cycle-pipeline-stitch-rs)
+- [Maintainers](#maintainers)
+- [Contributing](#contributing)
+- [Security](#security)
+- [Roadmap](#roadmap)
+- [Data Attribution & License](#data-attribution--license)
+
+---
+
+## Background
+
+GeoIP and threat intelligence datasets (e.g. MaxMind MMDB, IP2Location, IP2Proxy) traditionally rely on radix trees or hierarchical binary trees. While flexible, tree traversals suffer from:
+1. **CPU Pointer Chasing**: Multiple random cache line fetches per lookup ($O(\log N)$ or 24–32 tree steps).
+2. **Heavy Allocation Footprint**: Deserializing tree nodes into heap structures consumes hundreds of megabytes of RAM.
+3. **Disjoint Coverage**: Merging geo metadata with threat datasets requires multi-database joins during runtime packet evaluation.
+
+**IPAtlas** solves these fundamental bottlenecks by:
+1. **Streaming 1D-Sweep Offline Compiler**: Merges disjoint datasets in a single $O(N + M)$ linear pass, resolving overlaps into contiguous intervals.
+2. **Zero-Copy Memory-Mapped Flat Storage**: Slices verified and referenced directly from kernel page cache via `zerocopy` and `memmap2` without self-referential pointers or heap allocations.
+3. **Sub-100ns Lookups**: Delivers **60.9 ns** hot-L1 latency and **140 ns** cold DRAM access—**up to 50x faster than MaxMind MMDB**.
+
+---
+
+## Features
+
+- **Sub-100ns Lookups**: Benchmarked at **60.9 ns** hot cache and **~140 ns** cold/random DRAM access on standard modern CPUs.
 - **100% Sound Safe Zero-Copy Kernel Mmap**: Slices verified and referenced directly from kernel page cache via `zerocopy` and `memmap2` without self-referential `unsafe` pointers.
 - **Three-Dimensional Architecture**:
   - **Presets & Feature Masks**: Strip unneeded metadata to collapse intervals on the fly.
   - **Optimization Levels (`-O`)**: Semantic rules for cascade interval coalescing, string normalization, and symmetric coordinate quantization.
-  - **Generation V4 Layout Tiers**:
+  - **Generation V4/V5 Layout Tiers**:
     - **V4-Standard (12B)**: `RangeV4` (`from: u32, to: u32, prof_id: u32`), universal 32-bit profile indexing.
-    - **V4-Compact (8B)**: `RangeV4Compact` (`from: u32, count: u16, prof_id: u16`), 8 records per 64B cache line (-33% size).
+    - **V4-Compact (8B)**: `RangeV4Compact` (`from: u32, count: u16, prof_id: u16`), 8 records per 64B cache line (-32.4% size).
+    - **V5-Succinct (Elias-Fano)**: Compressed monotone bitvectors reaching ~100% of theoretical Shannon entropy floor.
 - **Streaming 1D-Sweep Compiler**: Single $O(N + M)$ streaming sweep merging IP2Location and IP2Proxy without loading whole input CSVs into RAM.
 - **Zero-Data-Loss Guarantee**: Preserves disjoint threat ranges occurring outside IP2Location Geo coverage.
 - **Universal Dataset Support**: Dynamic column detection for all IP2Location (`DB1`, `DB3`, `DB5`, `DB11`) and IP2Proxy (`PX1` – `PX12`) formats.
 - **Bitflag Threat Classification**: Single-cycle bitwise checks for Datacenter/Hosting, Residential ISP, Proxy, VPN, Tor/Botnet, Spam, and Crawlers.
+- **Embedded Zstd Container**: Transparent in-memory decompression without disk modifications.
+- **Monomorphic U-Cycle Pipeline (`stitch-rs`)**: Sub-2ns Bogon short-circuiting and strict threat policy enforcement.
 - **Zero External Runtime Dependencies**: Reader library compiles in under 1 second with `--no-default-features`.
+
+---
+
+## Architecture
+
+```text
+ipatlas/
+├── models/                         # Domain binary value objects and layouts
+│   ├── header.rs                   # Database container header (magic, flags, CRC32)
+│   ├── range.rs                    # 12B Standard, 8B Compact, and 36B IPv6 structs
+│   ├── profile.rs                  # 32B deduplicated metadata profiles
+│   ├── flags.rs                    # Granular threat bitmask (VPN, Tor, Botnet, Datacenter)
+│   └── crc.rs                      # CRC32 data integrity verification
+├── compiler/                       # Offline data synthesis and transformation engine
+│   ├── sweep.rs                    # 1D streaming sweep line algorithm
+│   ├── adapters.rs                 # Optimization pipeline (-O1..-O3)
+│   ├── format_detector.rs          # Dynamic schema recognition for IP2Location & IP2Proxy
+│   ├── presets.rs                  # Declarative presets (All, Firewall, Country, Compact)
+│   └── succinct.rs                 # Elias-Fano succinct monotone sequence encoder
+├── reader/                         # Production sub-microsecond query runtime
+│   ├── reader.rs                   # Zero-copy memory-mapped search engine
+│   ├── succinct.rs                 # Compressed monotone bitvector binary search
+│   └── decompressor.rs             # Lazy profile decompression for embedded Zstd
+├── pipeline/                       # High-performance U-cycle execution pipeline
+│   ├── pipeline.rs                 # stitch-rs state machine (Intent -> Context -> Outcome)
+│   ├── bogon.rs                    # L1-resident sub-nanosecond RFC1918 filter
+│   └── policy.rs                   # Security policy enforcement (VPN/Proxy rejection)
+└── main.rs                         # CLI frontend (build, inspect, query, benchmark)
+```
 
 ---
 
 ## Generation V4/V5 Layout Tiers & Efficiency Matrix
 
-IPAtlas provides three distinct layout tiers designed around the trade-off between memory footprint, zero-copy alignment, and hardware cache efficiency:
+IPAtlas provides distinct layout tiers designed around the trade-off between memory footprint, zero-copy alignment, and hardware cache efficiency:
 
 | Layout Tier | Status | Record Size | 5.3M Table RAM | Shannon Ratio | Hot L1 Latency | Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$) | vs MaxMind MMDB |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -84,17 +139,49 @@ ipatlas compile -O coalesce,lossy-coords,normalize-strings,compact-ranges ...
 
 ---
 
-## Installation & CLI Usage
+## Theoretical Limits & Shannon Entropy Analysis
 
-### Build from Source
+In information theory, the **Shannon entropy limit** defines the absolute lower bound of lossless data representation:
 
-```sh
-git clone https://github.com/ulquiorracode/ipatlas.git
-cd ipatlas
-cargo build --release
-```
+$$H(X) = - \sum_{i} P(x_i) \log_2 P(x_i)$$
 
-The optimized binary will be located at `./target/release/ipatlas`.
+For the combined global IPv4 space ($2^{32} \approx 4.29 \times 10^9$ addresses), data is naturally partitioned into disjoint CIDR / routing intervals with shared metadata attributes:
+- **Interval Boundary Entropy**: Specifying the cut-points of $5.3 \times 10^6$ intervals across the 32-bit integer universe via optimal monotonic difference bounds (Elias-Fano representation: $N \lceil \log_2(U/N) \rceil + 2N$) requires $\approx 11.2\text{ bits/record} \approx \mathbf{7.4\text{ MB}}$.
+- **Profile Alphabet Entropy**: Choosing among $\approx 50{,}000$ unique normalized profiles (Country, Region, City, ASN, Flags) requires $\lceil \log_2(50{,}000) \rceil \approx 15.6\text{ bits/record} \approx \mathbf{10.3\text{ MB}}$.
+- **Theoretical Minimum ($H_{\text{raw}}$)**: The absolute theoretical Shannon floor for lossless random-access interval topology is $\approx \mathbf{17.7\text{ MB}}$.
+
+### How IPAtlas Tiers Compare to the Shannon Limit
+
+| Storage Layer / Format | 5.3M Production Table Size | Ratio to Shannon Limit ($H_{\text{raw}}$) | Random Access Latency (L1 / DRAM) | Architectural Rationale |
+| :--- | :--- | :--- | :--- | :--- |
+| **Raw CSV Inputs** | **~740 MB** | $41.8 \times H_{\text{raw}}$ | N/A (linear parsing) | Redundant text strings, repeated ASCII coordinates |
+| **`V4-Standard` (12B)** | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **66.6 ns / 140 ns** | 100% safe zero-copy kernel mmap, 4-byte aligned flat binary search |
+| **`V4-Compact` (8B)** | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **72.0 ns / 145 ns** | **L1/L2 cache-line tuned** (8 records / 64B cache line, -32.4% size) |
+| **`--preset firewall`** | **7.9 MB** | **$0.44 \times H_{\text{raw}}$** | **35.0 ns / 90 ns** | Sub-alphabet collapse (City/Coords discarded, adjacent ranges coalesce) |
+| **`--preset country`** | **5.6 MB** | **$0.31 \times H_{\text{raw}}$** | **25.0 ns / 75 ns** | 233x reduction via country-level interval coalescing |
+| **Zstandard (.zst)** | **11.5 MB** | **$0.65 \times H_{\text{raw}}$** | Compressed distribution | Asymmetric Finite State Entropy (FSE) context compression |
+
+---
+
+## Install & Prerequisites
+
+Ensure the following tools are installed:
+
+1. **Rust Toolchain (1.74+)**:
+   ```bash
+   rustup default stable
+   ```
+2. **Build from source**:
+   ```bash
+   git clone https://github.com/ulquiorracode/ipatlas.git
+   cd ipatlas
+   cargo build --release
+   ```
+   The binary is output to `./target/release/ipatlas`.
+
+---
+
+## CLI Usage
 
 ### 1. Compile Datasets
 
@@ -125,11 +212,6 @@ ipatlas compile --preset firewall --layout compact --geo DB5.CSV --proxy PX10.CS
 # Embedded Zstandard Container (Transparent In-Memory Decompression):
 # Compresses the payload inside the .bin file while keeping native 60.9 ns L1 query speed:
 ipatlas compile --preset city --geo DB5.CSV --embedded-zstd -o ipatlas_city_zstd.bin
-
-# Distribution Compression (Unix-way):
-# Use native system utilities (zstd / pigz) to compress compiled binaries for distribution:
-zstd -19 --keep ipatlas_full.bin      # produces ipatlas_full.bin.zst
-pigz -k -9 ipatlas_full.bin           # produces ipatlas_full.bin.gz
 ```
 
 ### 2. Lookup an IP Address
@@ -175,30 +257,22 @@ ipatlas bench ipatlas_full.bin -n 1000000
 
 ## Rust Library API
 
-Add `ipatlas` to your `Cargo.toml`:
+Add IPAtlas to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ipatlas = "0.4.1"
+ipatlas = { version = "0.7.0", default-features = false }
 ```
 
-For minimal embeddable reader setups without compiler dependencies:
+### Basic Zero-Allocation Lookup
 
-```toml
-[dependencies]
-ipatlas = { version = "0.4.1", default-features = false }
-```
-
-### Example Usage
-
-#### Direct Zero-Copy Reader
 ```rust
 use ipatlas::IpAtlasReader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reader = IpAtlasReader::open("ipatlas_full.bin")?;
 
-    // Zero-allocation borrowed lookup (399 ns on 5.3M production database)
+    // Zero-allocation borrowed lookup (60.9 ns on 5.3M production database)
     if let Some(record) = reader.lookup_ref("1.1.1.1".parse()?) {
         println!("Country: {}", record.country);
         println!("City:    {}", record.city);
@@ -211,7 +285,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-#### Monomorphic U-Cycle Pipeline (`stitch-rs`)
+### Monomorphic U-Cycle Pipeline (`stitch-rs`)
+
 IPAtlas integrates the monomorphic U-cycle execution pipeline via `stitch-rs`:
 
 ```rust
@@ -240,44 +315,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ---
 
-## Theoretical Limits & Shannon Entropy Analysis
+## Maintainers
 
-In information theory, the **Shannon entropy limit** defines the absolute lower bound of lossless data representation:
-
-$$H(X) = - \sum_{i} P(x_i) \log_2 P(x_i)$$
-
-For the combined global IPv4 space ($2^{32} \approx 4.29 \times 10^9$ addresses), data is naturally partitioned into disjoint CIDR / routing intervals with shared metadata attributes:
-- **Interval Boundary Entropy**: Specifying the cut-points of $5.3 \times 10^6$ intervals across the 32-bit integer universe via optimal monotonic difference bounds (Elias-Fano representation: $N \lceil \log_2(U/N) \rceil + 2N$) requires $\approx 11.2\text{ bits/record} \approx \mathbf{7.4\text{ MB}}$.
-- **Profile Alphabet Entropy**: Choosing among $\approx 50{,}000$ unique normalized profiles (Country, Region, City, ASN, Flags) requires $\lceil \log_2(50{,}000) \rceil \approx 15.6\text{ bits/record} \approx \mathbf{10.3\text{ MB}}$.
-- **Theoretical Minimum ($H_{\text{raw}}$)**: The absolute theoretical Shannon floor for lossless random-access interval topology is $\approx \mathbf{17.7\text{ MB}}$.
-
-### How IPAtlas Tiers Compare to the Shannon Limit
-
-| Storage Layer / Format | 5.3M Production Table Size | Ratio to Shannon Limit ($H_{\text{raw}}$) | Random Access Latency (L1 / DRAM) | Architectural Rationale |
-| :--- | :--- | :--- | :--- | :--- |
-| **Raw CSV Inputs** | **~740 MB** | $41.8 \times H_{\text{raw}}$ | N/A (linear parsing) | Redundant text strings, repeated ASCII coordinates |
-| **`V4-Standard` (12B)** | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **66.6 ns / 140 ns** | 100% safe zero-copy kernel mmap, 4-byte aligned flat binary search |
-| **`V4-Compact` (8B)** | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **72.0 ns / 145 ns** | **L1/L2 cache-line tuned** (8 records / 64B cache line, -32.4% size) |
-| **`--preset firewall`** | **7.9 MB** | **$0.44 \times H_{\text{raw}}$** | **35.0 ns / 90 ns** | Sub-alphabet collapse (City/Coords discarded, adjacent ranges coalesce) |
-| **`--preset country`** | **5.6 MB** | **$0.31 \times H_{\text{raw}}$** | **25.0 ns / 75 ns** | 233x reduction via country-level interval coalescing |
-| **Zstandard (.zst)** | **11.5 MB** | **$0.65 \times H_{\text{raw}}$** | Compressed distribution | Asymmetric Finite State Entropy (FSE) context compression |
-
-### The Fundamental Tension: Compression vs Memory Access Latency
-
-Approaching 100% of the Shannon limit in active memory ($\approx 17.7\text{ MB}$) requires **succinct data structures** (such as Elias-Fano prefix encoding, bit-packed profile dictionaries, and rank/select bitvectors). 
-
-While succinct bit-packing cuts RAM usage by another ~50%, it introduces bit-shift decoding steps, non-aligned reads, and CPU branch mispredictions—increasing lookup latency from **~67 nanoseconds to ~600–1200 nanoseconds** (an 8–15x throughput penalty).
-
-IPAtlas intentionally selects `V4-Compact` (8 bytes per interval, 41.3 MB) as the production sweet spot: it resides within **2.3x of the mathematical Shannon limit** while maintaining **true zero-copy kernel memory mapping** and delivering **15,000,000 queries per second per CPU core**.
+- [@ulquiorracode](https://github.com/ulquiorracode) — Project Lead & Creator
 
 ---
 
-## Known Limitations & Production Notes (v0.5.0)
+## Contributing
 
-1. **Dual-Stack Support**: Generation V5 supports full dual-stack IPv4 (12B Standard / 8B Compact) and IPv6 (36B standard) binary search tables.
-2. **Dictionary Capacity**: `ProfileV4` dictionary indices for Region and ISP are 16-bit (`u16::MAX` = 65,535). Designed specifically for LITE and medium-scale datasets. If an index exceeds 65,535, it saturates safely with a warning.
-3. **Data Integrity**: Header validation enforces offset boundaries and section non-overlap with built-in CRC32 checksum verification.
-4. **Roadmap (`v0.6.0+`)**: Formalized architecture and specifications for the `V5-Succinct` layout tier (Elias-Fano interval packing targeting ~17.8 MB active RAM, reaching ~100% of the Shannon limit) in [`docs/SPECIFICATION.md`](docs/SPECIFICATION.md). Planned for resource-constrained IoT/embedded routers and WASM runtimes.
+We welcome contributions! Please review:
+1. [Code of Conduct](CODE_OF_CONDUCT.md)
+2. [Contribution Guidelines](CONTRIBUTING.md)
+3. Follow [Conventional Commits](https://www.conventionalcommits.org/) and English code artifact rules.
+
+---
+
+## Security
+
+Please report vulnerabilities confidentially via GitHub Security Advisories or by reviewing [SECURITY.md](SECURITY.md).
+
+---
+
+## Roadmap
+
+Detailed milestones, architectural tracking, and future features are documented in [ROADMAP.md](ROADMAP.md).
 
 ---
 

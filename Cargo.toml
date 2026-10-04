@@ -2,6 +2,7 @@
 name = "ipatlas"
 version = "0.7.0"
 edition = "2021"
+rust-version = "1.74"
 authors = ["ulquiorracode"]
 description = "Ultra-fast zero-copy binary GeoIP and Proxy/VPN threat database compiler and reader in Rust"
 license = "MIT"

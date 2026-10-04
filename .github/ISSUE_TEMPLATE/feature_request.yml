@@ -1,0 +1,66 @@
+name: "Feature Request"
+description: "Suggest a new feature, architecture enhancement, or performance optimization"
+title: "feat(<scope>): <short description of the feature>"
+labels: ["enhancement", "proposal"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting an idea for IPAtlas! Please articulate the problem, use case, and proposed architecture.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: "Affected Component / Layer"
+      description: "Which part of the IPAtlas architecture does this proposal target?"
+      options:
+        - "Reader Engine (mmap / zero-copy / lookup)"
+        - "Compiler Engine (1D sweep / adapters / coalescing)"
+        - "Pipeline & U-Cycle (stitch-rs integration)"
+        - "Layout Tiers (V4-Standard / V4-Compact / Succinct)"
+        - "Compression & Decompression (Embedded Zstd)"
+        - "CLI & Tooling (ipatlas binary)"
+      default: 0
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: "Problem or Motivation"
+      description: "Is your feature request related to a problem or limitation? Please describe."
+      placeholder: "Currently, looking up IP addresses in scenario X requires..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: "Proposed Solution & Design"
+      description: "Describe the solution you would like to see, including API design or code examples if applicable."
+      placeholder: |
+        ```rust
+        let reader = IpAtlasReader::open("db.bin")?;
+        // proposed new method or workflow
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Alternatives Considered"
+      description: "Any alternative solutions, workarounds, or prior art (e.g. from MaxMind MMDB or other GeoIP engines)."
+      placeholder: "An alternative approach would be to..."
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: "Confirmation"
+      options:
+        - label: "I have checked existing issues and ROADMAP.md to ensure this feature is not already tracked."
+          required: true
+        - label: "I am willing to submit a Pull Request or participate in technical discussion for this feature."
+          required: false

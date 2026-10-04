@@ -1,0 +1,84 @@
+name: "Bug Report"
+description: "File a bug report or crash analysis to help improve IPAtlas"
+title: "fix(<scope>): <short description of the bug>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please provide detailed context to help reproduce and resolve the bug.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: "Affected Component / Layer"
+      description: "Which part of IPAtlas is experiencing the issue?"
+      options:
+        - "Reader Engine (mmap / zero-copy / lookup)"
+        - "Compiler Engine (1D sweep / adapters / coalescing)"
+        - "Pipeline & U-Cycle (stitch-rs integration)"
+        - "Layout Tiers (V4-Standard / V4-Compact / Succinct)"
+        - "Compression & Decompression (Embedded Zstd)"
+        - "CLI & Tooling (ipatlas binary)"
+      default: 0
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: "Rust & OS Environment"
+      description: "e.g., Rust 1.74 / 1.85 (Windows 11 x64 / Ubuntu 22.04 x64 / macOS arm64)"
+      placeholder: "Rust 1.85, Windows 11 x64"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: "Bug Description"
+      description: "A clear and concise description of what the bug is."
+      placeholder: "When querying IP `...` or compiling dataset `...`, reader returns incorrect data or panics..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: "Steps to Reproduce"
+      description: "Exact steps to reproduce the behavior."
+      placeholder: |
+        1. Compile database with flags `...`
+        2. Open with `IpAtlasReader::open(...)`
+        3. Query IP address `...`
+        4. See incorrect result or panic
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: "Expected Behavior"
+      description: "A clear and concise description of what you expected to happen."
+      placeholder: "The reader should return the matching profile without errors..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: "Relevant Logs / Backtraces"
+      description: "Please paste terminal output, RUST_BACKTRACE=1 stack traces, or panic messages."
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: "Validation Checklist"
+      options:
+        - label: "I have searched existing issues to ensure this is not a duplicate."
+          required: true
+        - label: "I am using the latest commit from `main` or the latest release."
+          required: true
