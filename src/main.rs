@@ -500,7 +500,10 @@ fn run_bench(args: BenchArgs) -> anyhow::Result<()> {
     let qps = (args.count as f64) / total_secs;
     let avg_ns = (total_time.as_nanos() as f64) / (args.count as f64);
 
-    println!("Completed in {:.3}s (Single-Threaded)", total_secs);
+    println!(
+        "Completed in {:.3}s (Single-Threaded Full Record)",
+        total_secs
+    );
     println!("Throughput:      {} queries/sec", format_num(qps as u64));
     println!(
         "Average Latency: {:.1} ns/query ({:.3} µs)",
@@ -513,6 +516,62 @@ fn run_bench(args: BenchArgs) -> anyhow::Result<()> {
         format_num(args.count),
         (hits as f64 / args.count as f64) * 100.0
     );
+
+    // Flags-only Fast Path Benchmark (Firewall mode: zero-allocation, no strings)
+    let t_flags = Instant::now();
+    let mut flags_hits = 0;
+    for &ip in &test_ips {
+        if reader.lookup_flags_u32(ip).is_some() {
+            flags_hits += 1;
+        }
+    }
+    let total_secs_flags = t_flags.elapsed().as_secs_f64();
+    let qps_flags = (args.count as f64) / total_secs_flags;
+    let avg_ns_flags = (t_flags.elapsed().as_nanos() as f64) / (args.count as f64);
+    println!("\nFlags-Only Fast Path (Single-Threaded, No String Allocation):");
+    println!(
+        "Throughput:      {} queries/sec",
+        format_num(qps_flags as u64)
+    );
+    println!(
+        "Average Latency: {:.1} ns/query ({:.3} µs)",
+        avg_ns_flags,
+        avg_ns_flags / 1000.0
+    );
+    println!("Speedup vs Full: {:.2}x", qps_flags / qps);
+    println!(
+        "Hit Rate:        {}/{}",
+        format_num(flags_hits),
+        format_num(args.count)
+    );
+
+    // Country-only Fast Path Benchmark
+    let t_country = Instant::now();
+    let mut country_hits = 0;
+    for &ip in &test_ips {
+        if reader.lookup_country_code_u32(ip).is_some() {
+            country_hits += 1;
+        }
+    }
+    let total_secs_country = t_country.elapsed().as_secs_f64();
+    let qps_country = (args.count as f64) / total_secs_country;
+    let avg_ns_country = (t_country.elapsed().as_nanos() as f64) / (args.count as f64);
+    println!("\nCountry Code Fast Path (Single-Threaded):");
+    println!(
+        "Throughput:      {} queries/sec",
+        format_num(qps_country as u64)
+    );
+    println!(
+        "Average Latency: {:.1} ns/query ({:.3} µs)",
+        avg_ns_country,
+        avg_ns_country / 1000.0
+    );
+    println!(
+        "Hit Rate:        {}/{}",
+        format_num(country_hits),
+        format_num(args.count)
+    );
+    println!("Speedup vs Full: {:.2}x", qps_country / qps);
 
     // Multi-threaded benchmark via Rayon
     use rayon::prelude::*;
