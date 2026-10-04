@@ -18,8 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `IpAtlasTerminal`: zero-copy resolution terminal mapping into borrowed mmap slices.
   - Added `IpAtlasPipelineExt` trait extending `IpAtlasReader` with `standard_pipeline()` and `query_pipeline()`.
   - Added `StandardLookupPipeline` concrete type alias eliminating trait object overhead.
-  - CLI enhancements: `ipatlas lookup` shows pipeline execution latency; `ipatlas bench` benchmarks U-cycle throughput and bogon short-circuits.
   - Comprehensive integration test suite in `tests/test_pipeline.rs`.
+- **Composable Compiler Stream & Topology Adapters (StateFS-style)**:
+  - Added `compiler::adapters` module with isolated, monomorphic iterator adapters.
+  - Added `CoalesceAdapter`: decouples interval topology coalescing from geometric sweep-line logic.
+  - Added `LossyCoordsAdapter` & `TransformableEntry`: isolates symmetric coordinate quantization into a composable streaming stage.
+  - Added `CompactRangePacker`: isolates 8-byte chunk slicing and span boundary splitting from binary database writer.
+  - Added `CompilerStreamExt`: provides fluent `.coalesce()` and `.quantize_coords()` composition.
+  - Added isolated adapter unit tests in `tests/test_adapters.rs`.
 
 ## [0.4.0] - 2026-10-02
 

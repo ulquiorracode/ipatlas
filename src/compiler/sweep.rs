@@ -237,6 +237,10 @@ where
             }
         }
     }
+    #[inline]
+    pub fn advance(&mut self) -> Option<MergedEntry> {
+        self.advance_sweep()
+    }
 }
 
 impl<G, P> Iterator for SweepLineMerger<G, P>
@@ -271,11 +275,9 @@ where
                     return Some(prev);
                 }
                 (Some(mut prev), Some(curr)) => {
-                    if prev.ip_to < u32::MAX
-                        && prev.ip_to + 1 == curr.ip_from
-                        && prev.matches_attributes(&curr)
-                    {
-                        prev.ip_to = curr.ip_to;
+                    use crate::compiler::adapters::CoalescibleEntry;
+                    if prev.can_merge_with(&curr) {
+                        prev.set_key_to(curr.key_to());
                         self.pending_prev = Some(prev);
                     } else {
                         self.pending_prev = Some(curr);
@@ -522,6 +524,11 @@ where
             }
         }
     }
+
+    #[inline]
+    pub fn advance(&mut self) -> Option<MergedEntryV6> {
+        self.advance_sweep()
+    }
 }
 
 impl<G, P> Iterator for SweepLineMergerV6<G, P>
@@ -556,11 +563,9 @@ where
                     return Some(prev);
                 }
                 (Some(mut prev), Some(curr)) => {
-                    if prev.ip_to < u128::MAX
-                        && prev.ip_to + 1 == curr.ip_from
-                        && prev.matches_attributes(&curr)
-                    {
-                        prev.ip_to = curr.ip_to;
+                    use crate::compiler::adapters::CoalescibleEntry;
+                    if prev.can_merge_with(&curr) {
+                        prev.set_key_to(curr.key_to());
                         self.pending_prev = Some(prev);
                     } else {
                         self.pending_prev = Some(curr);

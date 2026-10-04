@@ -1,3 +1,4 @@
+pub mod adapters;
 pub mod parser;
 pub mod sweep;
 pub mod writer;

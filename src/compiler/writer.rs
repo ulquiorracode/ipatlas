@@ -188,19 +188,12 @@ impl DatabaseWriter {
                     vec.push(RangeV4::new(entry.ip_from, entry.ip_to, profile_id));
                 }
                 RangeStorage::Compact(vec) => {
-                    let mut curr_from = entry.ip_from;
-                    let target_to = entry.ip_to;
-                    let prof_u16 = profile_id as u16;
-
-                    while curr_from <= target_to {
-                        let span = (target_to - curr_from).min(u16::MAX as u32);
-                        vec.push(RangeV4Compact::new(curr_from, span as u16, prof_u16));
-                        if span == u16::MAX as u32 && curr_from < u32::MAX - span {
-                            curr_from += span + 1;
-                        } else {
-                            break;
-                        }
-                    }
+                    crate::compiler::adapters::CompactRangePacker::pack_span(
+                        entry.ip_from,
+                        entry.ip_to,
+                        profile_id as u16,
+                        vec,
+                    );
                 }
             }
         }
