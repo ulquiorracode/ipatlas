@@ -265,7 +265,7 @@ IPAtlas intentionally selects `V4-Compact` (8 bytes per interval, 41.3 MB) as th
 1. **Dual-Stack Support**: Generation V5 supports full dual-stack IPv4 (12B Standard / 8B Compact) and IPv6 (36B standard) binary search tables.
 2. **Dictionary Capacity**: `ProfileV4` dictionary indices for Region and ISP are 16-bit (`u16::MAX` = 65,535). Designed specifically for LITE and medium-scale datasets. If an index exceeds 65,535, it saturates safely with a warning.
 3. **Data Integrity**: Header validation enforces offset boundaries and section non-overlap with built-in CRC32 checksum verification.
-4. **Roadmap (`v0.6.0+`)**: Investigating an optional `V5-Succinct` ultra-compressed layout tier (Elias-Fano interval packing targeting ~18 MB active RAM) for constrained embedded routers and WASM runtimes.
+4. **Roadmap (`v0.6.0+`)**: Formalized architecture and specifications for the `V5-Succinct` layout tier (Elias-Fano interval packing targeting ~17.8 MB active RAM, reaching ~100% of the Shannon limit) in [`docs/SPECIFICATION.md`](docs/SPECIFICATION.md). Planned for resource-constrained IoT/embedded routers and WASM runtimes.
 
 ---
 
