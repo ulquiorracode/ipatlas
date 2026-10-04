@@ -21,15 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Structure of Arrays (SoA) Storage Layout**:
   - Implemented columnar storage layout for interval tables: splits record structs into contiguous homogeneous arrays (`soa_ip_from`, `soa_count` / `soa_ip_to`, `soa_profile_id`).
   - Achieves 100% cache line utilization during binary search (16 `u32` keys per 64-byte L1 cache line without fetching unwanted metadata fields).
-  - Accelerates random IPv4 lookup latency from 70.8 ns down to **15.4 ns** (4.6x faster than AoS, 71x faster than MaxMind MMDB).
+  - Accelerates random IPv4 lookup latency down to **15.4 ns** on 10k L1 cache-fit microbenchmarks and **84.2 ns** on 5.3M production snapshots.
 - **Flags-Only Fast Path API**:
   - Added zero-allocation, stringless query primitives for high-throughput packet filters and firewalls:
-    - `IpAtlasReader::lookup_flags_u32(ip: u32) -> Option<ThreatFlags>`
+    - `IpAtlasReader::lookup_flags_u32(ip: u32) -> Option<GeoFlags>`
     - `IpAtlasReader::is_threat_u32(ip: u32) -> bool`
     - `IpAtlasReader::is_proxy_u32(ip: u32) -> bool`
     - `IpAtlasReader::is_datacenter_u32(ip: u32) -> bool`
-    - `IpAtlasReader::lookup_country_code_u32(ip: u32) -> Option<[u8; 2]>`
-  - Bypasses string blob offset scanning and UTF-8 verification, resolving security and threat rules in **18.5 ns** (3.8x faster than full record queries).
+    - `IpAtlasReader::lookup_country_code_u32(ip: u32) -> Option<&str>`
+  - Bypasses string blob offset scanning and UTF-8 verification, resolving security and threat rules at **11.88M QPS** (2.5x faster than full record queries).
+- **Table Layout Dispatch Hoisting**:
+  - Hoisted layout branching (`is_soa`, `is_compact`, version decoding) to file initialization via `TableDispatch` descriptor enum.
+  - Eliminated per-query `ref_from_bytes` slice revalidations and cascading branches across all accessors.
 - **OS Kernel Page Advice (`madvise` & `warmup`)**:
   - Automatically advises OS kernel via `libc::madvise(MADV_RANDOM)` on file open on Unix targets to tune virtual memory readahead for random binary searches.
   - Added `IpAtlasReader::warmup()` providing `libc::madvise(MADV_WILLNEED)` kernel advice on Unix to request memory page prefetching prior to serving live edge traffic.
@@ -37,11 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `calculate_chunk_records_count(record_size, target_chunk_bytes)` in `models::optimization`.
   - Evaluated chunk boundary trade-offs across 4KB, 16KB, 64KB, and 256KB in Criterion benchmarks, measuring **692 MB/s** sustained decompression at 64 KB L2-aligned chunks to prepare the ground for future blocked-container streaming layouts (while the monolithic `EMBEDDED_ZSTD` container remains unchanged in v0.8.0).
 
+## [0.7.0] - 2026-10-04
+
+### Added
 
 - **Embedded Compression Container Architecture (`EMBEDDED_ZSTD`)**:
   - Added optional embedded Zstandard payload compression (`zstd-19`) inside binary `.bin` database files.
   - Specified physical container layout and header bitmask flag: `HEADER_FLAG_EMBEDDED_ZSTD = 0x0004` encoded in `HeaderV5::reserved`.
-  - Transparent in-memory decompression in `IpAtlasReader`: keeps uncompressed 80-byte `HeaderV5` on disk, transparently decodes compressed payload into an anonymous memory buffer upon opening, preserving exact CRC32 verification and sub-100ns (60.9 ns) lookup speed with zero subsequent allocations.
+  - Transparent in-memory decompression in `IpAtlasReader`: keeps uncompressed 80-byte `HeaderV5` on disk, transparently decodes compressed payload into an anonymous memory buffer upon opening, preserving exact CRC32 verification and sub-100ns lookup speed with zero subsequent allocations.
   - Added `--embedded-zstd` (alias `--zstd`) flag to `ipatlas compile` and `-O embedded-zstd` optimization rule.
   - Added `StorageBuffer { Mmap(Mmap), Memory(Vec<u8>) }` abstraction in `IpAtlasReader` providing transparent `Deref<Target = [u8]>` zero-copy views.
   - Made `zstd` an optional dependency gated under `feature = "embedded-zstd"`: preserves minimal zero-dependency reader builds (`--no-default-features`), returning an actionable error (`"rebuild with embedded-zstd"`) when an `EMBEDDED_ZSTD` binary is opened without the feature.
@@ -119,8 +125,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Profile ID Normalization (Format V4)**: Decoupled IP ranges from repeated metadata. Replaces 28-byte inline records with compact 12-byte ranges (`from`, `to`, `profile_id`) and a dedicated 20-byte Profile Table.
 - **Presets & Feature Masks**: Added `--preset` (`full`, `city`, `firewall`, `country`, `threats`) and `--features` bitmask compiler options. Unused metadata fields are masked and adjacent intervals coalesce on the fly, reducing database size down to **5.6 MB** binary (~1.2 MB `.zst`, **233x reduction**) for pure country geo-blocking.
+
+## [0.2.0] - 2026-10-01
+
+### Added
+
+- **Profile ID Normalization (Format V4)**: Decoupled IP ranges from repeated metadata. Replaces 28-byte inline records with compact 12-byte ranges (`from`, `to`, `profile_id`) and a dedicated 20-byte Profile Table.
 - **Universal Dataset Support**: Dynamic column detection for all IP2Location LITE/Commercial databases (`DB1`, `DB3`, `DB5`, `DB11`) and IP2Proxy (`PX1` - `PX12`).
 - **Zstandard Distribution (`.zst`)**: Automated compression using Zstandard level 19, reducing distribution size by **26.8x** (740 MB CSV down to 27.6 MB).
 - **Flexible CLI Arguments**: Added `--geo` (or `--db`) and `--proxy` (or `--px`) flags to compiler CLI.
@@ -128,8 +139,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Rebranding**: Project renamed from `grlg-geo` to `ipatlas`. CLI entry point renamed to `ipatlas`.
-- **Binary Header**: Magic updated to `b'ATLS'`.
+- **Binary Header**: Magic updated to `b'ATLS'` (with backward compatibility for `b'GRLG'`).
 - **Memory Footprint**: Reduced uncompressed binary size by **55.2%** (from 214.1 MB down to 95.9 MB for unified full global dataset).
+
+### Deprecated / Compatibility
+
+- `GrlgReader` alias preserved for backward compatibility with `IpAtlasReader`.
+- Legacy CLI flags (`--db5`, `--px10`) retained as aliases.
 
 ## [0.1.0] - 2026-09-29
 
