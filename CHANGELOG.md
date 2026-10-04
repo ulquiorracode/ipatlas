@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `CompactRangePacker`: isolates 8-byte chunk slicing and span boundary splitting from binary database writer.
   - Added `CompilerStreamExt`: provides fluent `.coalesce()` and `.quantize_coords()` composition.
   - Added isolated adapter unit tests in `tests/test_adapters.rs`.
+- **Documentation & Theoretical Bounds**:
+  - Added *Theoretical Limits & Shannon Entropy Analysis* section to `README.md`, detailing information-theoretic minimums ($H_{\text{raw}} \approx 17.7\text{ MB}$), compression ratios, and memory access latency trade-offs.
+  - Added architectural roadmap for future `V5-Succinct` layout tier.
 
 ## [0.4.0] - 2026-10-02
 
