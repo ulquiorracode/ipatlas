@@ -348,6 +348,7 @@ dependencies = [
  "anyhow",
  "clap",
  "criterion",
+ "libc",
  "memchr",
  "memmap2",
  "rayon",

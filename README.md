@@ -106,20 +106,22 @@ ipatlas/
 
 IPAtlas provides distinct layout tiers designed around the trade-off between memory footprint, zero-copy alignment, and hardware cache efficiency:
 
-| Layout Tier | Status | Record Size | 5.3M Table RAM | Shannon Ratio | Hot L1 Latency | Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$) | vs MaxMind MMDB |
+| Layout Tier | Status | Record Size | 5.3M Table RAM | Shannon Ratio | Query Latency (Hot L1 / DRAM) | Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$) | vs MaxMind MMDB |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **MaxMind MMDB** *(Baseline)* | Industry Standard | ~22 bytes (tree) | **115.0 MB** | $6.50 \times H_{\text{raw}}$ | **1,100 ns** | **$126,500\text{ MB}\cdot\text{ns}$** (1.0x baseline) | Reference |
-| **`V4/V5-Standard (AoS)`** | **Production** | 12 bytes | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **66.7 ns** | **$4,075\text{ MB}\cdot\text{ns}$** | **31.0x more efficient** |
-| **`V4/V5-Compact (AoS)`** | **Production** | 8 bytes | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **60.9 ns** | **$2,515\text{ MB}\cdot\text{ns}$** | **50.3x more efficient** |
-| **`V4/V5-Compact (SoA)`** (`--layout soa`) | **Production** | 8 bytes (columnar) | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **15.4 ns** | **$636\text{ MB}\cdot\text{ns}$** *(Peak Hardware Sweet Spot)* | **198.8x more efficient** |
-| **Flags-Only Fast Path** | **Production** | Zero-allocation | N/A | N/A | **18.5 ns** | N/A | **Edge Firewall Mode** |
-| **`V5-Succinct`** *(Shannon Bound)* | **Experimental** *(Non-Prod)* | ~2.8 bytes (E-F) | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
+| **MaxMind MMDB** *(Baseline)* | Industry Standard | ~22 bytes (tree) | **115.0 MB** | $6.50 \times H_{\text{raw}}$ | **1,100 ns** *(5.3M table)* | **$126,500\text{ MB}\cdot\text{ns}$** (1.0x baseline) | Reference |
+| **`V4/V5-Standard (AoS)`** | **Production** | 12 bytes | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **66.7 ns** *(5.3M L1)* | **$4,075\text{ MB}\cdot\text{ns}$** | **31.0x more efficient** |
+| **`V4/V5-Compact (AoS)`** | **Production** | 8 bytes | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **60.9 ns** *(5.3M L1)* / **70.8 ns** *(10k)* | **$2,515\text{ MB}\cdot\text{ns}$** | **50.3x more efficient** |
+| **`V4/V5-Compact (SoA)`** (`--layout soa`) | **Production (Opt)** | 8 bytes (columnar) | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **15.4 ns** *(10k L1 cache-fit)* | **$636\text{ MB}\cdot\text{ns}$** *(Peak L1 Cache Sweet Spot)* | **198.8x more efficient** |
+| **Flags-Only Fast Path** | **Production** | Zero-allocation | N/A | N/A | **18.5 ns** *(10k L1)* | N/A | **Edge Firewall Mode** |
+| **`V5-Succinct`** *(Shannon Bound)* | **Experimental** *(Non-Prod)* | ~2.8 bytes (E-F) | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** *(5.3M table)* | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
 
 > **Benchmark Hardware & Testbed**: Measured on x86_64 CPU (3.60 GHz base, AVX2 enabled, 32KB L1d / 512KB L2 cache) on Windows 11 / Ubuntu 22.04 LTS kernel 6.5 using Criterion.rs 0.5.1 with 1M warmups and 1024 pseudo-randomized addresses. Evaluated against global 5,318,878 post-coalesced interval catalog (IP2Location DB5 + IP2Proxy PX10 snapshot; uncoalesced raw multi-provider sources span ~7.9M intervals, reduced by `-O1` coalescing).
 >
-> **Experimental Designation**: `V5-Succinct` is strictly an **experimental research tier** for extreme memory-constrained devices (16MB routers). For all production services and edge reverse proxies, **`V4/V5-Compact (SoA or AoS)`** is the recommended default.
+> **Dataset Size Methodology Notice**:
+> - Full table measurements (**60.9 ns / 66.7 ns / 353.8 ns**) reflect the complete **5,318,878 production dataset** spanning 41–61 MB of memory.
+> - The **15.4 ns** SoA and **18.5 ns** Flags-Only measurements are derived from the synthetic **10,000 interval benchmark** in `benches/lookup_bench.rs`, where the 40 KB `soa_ip_from` slice fits almost entirely into the 32 KB L1d / L2 cache hierarchy. On the full 5.3M production snapshot (~21 MB `ip_from` array), binary search traverses DRAM cache lines and latency is bounded by memory bus round-trips. AoS remains the battle-tested production default until full-snapshot SoA benchmarks are finalized.
 >
-> **Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$)**: Lower is better. While `V5-Succinct` reaches the absolute mathematical Shannon limit of in-memory compression (17.8 MB), `V4/V5-Compact (SoA)` achieves the global architectural maximum: columnar `soa_ip_from` slices pack 16 addresses into a single 64-byte L1 CPU cache line, driving query latency down to **15.4 ns** and delivering **198.8x higher efficiency than MaxMind MMDB**.
+> **Experimental Designation**: `V5-Succinct` is strictly an **experimental research tier** for extreme memory-constrained devices (16MB routers). For all production services and edge reverse proxies, **`V4/V5-Compact (AoS)`** is the recommended default.
 >
 > **Automated Protection**: If the number of unique normalized profiles exceeds `65,535` (`u16::MAX`), the compiler automatically falls back from `Compact` to `Standard` without data truncation.
 

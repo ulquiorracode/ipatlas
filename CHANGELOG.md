@@ -30,12 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `IpAtlasReader::is_datacenter_u32(ip: u32) -> bool`
     - `IpAtlasReader::lookup_country_code_u32(ip: u32) -> Option<[u8; 2]>`
   - Bypasses string blob offset scanning and UTF-8 verification, resolving security and threat rules in **18.5 ns** (3.8x faster than full record queries).
-- **OS Kernel Prefetch & Cache Warmup (`madvise` & `warmup`)**:
-  - Linux/Unix kernel page advice via `libc::madvise(MADV_RANDOM)` on file open to optimize kernel page-in behavior for binary search.
-  - Added `IpAtlasReader::warmup()` / `warmup_advice(MADV_WILLNEED)` to touch interval boundary pages and eliminate cold DRAM page faults prior to serving live edge traffic.
-- **Scientifically Grounded Blocked-Zstandard Chunk Sizing**:
+- **OS Kernel Page Advice (`madvise` & `warmup`)**:
+  - Automatically advises OS kernel via `libc::madvise(MADV_RANDOM)` on file open on Unix targets to tune virtual memory readahead for random binary searches.
+  - Added `IpAtlasReader::warmup()` providing `libc::madvise(MADV_WILLNEED)` kernel advice on Unix to request memory page prefetching prior to serving live edge traffic.
+- **Scientifically Grounded Blocked-Zstandard Chunk Sizing Helper & Microbenchmark**:
   - Added `calculate_chunk_records_count(record_size, target_chunk_bytes)` in `models::optimization`.
-  - Configures 64 KB target chunk boundaries aligned with CPU L2 caches, achieving **692 MB/s** sustained decompression throughput while preventing monolithic memory decompression spikes.
+  - Evaluated chunk boundary trade-offs across 4KB, 16KB, 64KB, and 256KB in Criterion benchmarks, measuring **692 MB/s** sustained decompression at 64 KB L2-aligned chunks to prepare the ground for future blocked-container streaming layouts (while the monolithic `EMBEDDED_ZSTD` container remains unchanged in v0.8.0).
 
 
 - **Embedded Compression Container Architecture (`EMBEDDED_ZSTD`)**:

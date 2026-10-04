@@ -54,6 +54,9 @@ To ensure strict scientific reproducibility and eliminate unsubstantiated market
 - **Operating System**: Windows 11 Pro / Ubuntu 22.04 LTS kernel 6.5.
 - **Harness & Profiler**: Criterion.rs 0.5.1 with 1,000,000 warm-up samples, 1024 pseudo-random queries to defeat branch prediction (`benches/lookup_bench.rs`).
 - **Baseline Dataset**: Standard global GeoIP table containing **5,318,878 IPv4 intervals** (post-merge IP2Location DB5 + IP2Proxy PX10 dataset snapshot, SHA-256: `9a8f4c2e...` verified in `tests/verify_succinct_production.rs`). Note: raw uncoalesced multi-provider catalogs reach 7.9M intervals, which collapse to 5.3M under `-O1` coalescing rules.
+- **Microbench vs Full Table Methodology**:
+  - Full-table benchmarks (**60.9 ns / 66.7 ns / 353.8 ns**) represent the 5.3M record production table spanning 41–61 MB of RAM.
+  - The **15.4 ns** SoA and **18.5 ns** Flags-Only measurements represent synthetic **10,000 interval microbenchmarks** where the 40 KB `soa_ip_from` array fits almost entirely into L1d / L2 cache. On the full 5.3M production database (~21 MB `ip_from`), cache misses transition access to DRAM.
 - **Tier 3 Status**: `V5-Succinct` is designated strictly as **Experimental** for extreme low-memory embedded routers (16MB RAM) and research targets. For general production backends and edge proxies, **Tier 2 (`V4/V5-Compact`)** is the recommended default.
 
 ---

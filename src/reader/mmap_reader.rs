@@ -269,6 +269,16 @@ impl IpAtlasReader {
             }
         }
 
+        #[cfg(unix)]
+        {
+            if let StorageBuffer::Mmap(ref m) = reader.mmap {
+                // SAFETY: mmap is valid and mapped, advises kernel for binary search access pattern.
+                unsafe {
+                    libc::madvise(m.as_ptr() as *mut libc::c_void, m.len(), libc::MADV_RANDOM);
+                }
+            }
+        }
+
         Ok(reader)
     }
 
@@ -903,13 +913,13 @@ impl IpAtlasReader {
         self.lookup(ip)
     }
 
-    /// Advises kernel to prioritize random access reading and warms up memory pages into RAM.
+    /// Advises the OS kernel to prefetch memory pages into RAM via `madvise(MADV_WILLNEED)` on Unix systems.
     pub fn warmup(&self) {
         #[cfg(unix)]
         {
             if let StorageBuffer::Mmap(ref m) = self.mmap {
+                // SAFETY: mmap is valid and mapped, passes valid pointer and length to madvise.
                 unsafe {
-                    libc::madvise(m.as_ptr() as *mut libc::c_void, m.len(), libc::MADV_RANDOM);
                     libc::madvise(
                         m.as_ptr() as *mut libc::c_void,
                         m.len(),
