@@ -3,14 +3,54 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 pub const MAGIC: [u8; 4] = *b"ATLS";
 pub const HEADER_SIZE_V4: usize = 68;
 
-/// Standard V4 layout: 12-byte ranges, 32-bit profile IDs.
-pub const VERSION_V4_STANDARD: u16 = 4;
+/// Logical container generation version.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ContainerVersion {
+    V4 = 4,
+    V5 = 5,
+}
+
+/// Record family size and indexing capacity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RecordFamily {
+    /// Standard 12-byte ranges, 32-bit profile IDs.
+    Standard = 0,
+    /// Compact 8-byte ranges, 16-bit counts and profile IDs.
+    Compact = 1,
+    /// Experimental Succinct Elias-Fano representation.
+    Succinct = 2,
+}
+
+/// Physical memory layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StorageLayout {
+    /// Array of Structures: contiguous records [R0, R1, R2, ...]
+    Aos = 0,
+    /// Structure of Arrays: separate column arrays [ip_from, ...], [count, ...], [prof_id, ...]
+    Soa = 1,
+}
+
+// ----------------------------------------------------------------------------
+// Version bit-encoding matrix:
+// Major (bits 8..15): 0x04 = Gen V4, 0x05 = Gen V5.
+// Bit 0: Legacy compact flag (0x0401, 0x0501 = Compact AoS).
+// Bit 1: Layout (0 = AoS, 1 = SoA). E.g. 0x0402 / 0x0502 = Standard SoA, 0x0403 / 0x0503 = Compact SoA.
+// Or nibbles:
+// 0x0400 / 0x0500: Standard AoS (also 4, 5)
+// 0x0401 / 0x0501: Compact AoS (legacy compatibility alias)
+// 0x0402 / 0x0502: Standard SoA
+// 0x0403 / 0x0503: Compact SoA
+// ----------------------------------------------------------------------------
+
+pub const VERSION_V4_STANDARD: u16 = 4; // Legacy V4 (0x0004 or 0x0400)
+pub const VERSION_V4_STANDARD_AOS: u16 = 0x0400;
+pub const VERSION_V4_STANDARD_SOA: u16 = 0x0402;
+pub const VERSION_V4_COMPACT_AOS: u16 = 0x0401; // Legacy 0x0401
+pub const VERSION_V4_COMPACT_SOA: u16 = 0x0403;
+pub const VERSION_V4_COMPACT: u16 = 0x0401; // Legacy V4.1 compact AoS compatibility alias
+
 pub const RECORD_SIZE_V4_STANDARD: u16 = 12;
-
-/// Compact V4.1 layout: 8-byte ranges, 16-bit counts and profile IDs.
-pub const VERSION_V4_COMPACT: u16 = 0x0401;
 pub const RECORD_SIZE_V4_COMPACT: u16 = 8;
-
 pub const PROFILE_SIZE_V4: usize = 20;
 
 /// Header structure for IPAtlas Version 4 and 4.1 databases (68 bytes).
@@ -39,8 +79,34 @@ pub struct HeaderV4 {
 
 impl HeaderV4 {
     #[inline(always)]
+    pub fn is_soa(&self) -> bool {
+        self.version == VERSION_V4_COMPACT_SOA || self.version == VERSION_V4_STANDARD_SOA
+    }
+
+    #[inline(always)]
     pub fn is_compact(&self) -> bool {
-        self.version == VERSION_V4_COMPACT && self.record_size == RECORD_SIZE_V4_COMPACT
+        self.record_size == RECORD_SIZE_V4_COMPACT
+            || self.version == VERSION_V4_COMPACT
+            || self.version == VERSION_V4_COMPACT_AOS
+            || self.version == VERSION_V4_COMPACT_SOA
+    }
+
+    #[inline(always)]
+    pub fn family(&self) -> RecordFamily {
+        if self.is_compact() {
+            RecordFamily::Compact
+        } else {
+            RecordFamily::Standard
+        }
+    }
+
+    #[inline(always)]
+    pub fn layout(&self) -> StorageLayout {
+        if self.is_soa() {
+            StorageLayout::Soa
+        } else {
+            StorageLayout::Aos
+        }
     }
 
     /// Validates magic, version, and non-overlapping section boundary integrity.
@@ -49,10 +115,14 @@ impl HeaderV4 {
             return Err("Invalid magic bytes (expected 'ATLS')");
         }
 
-        let is_std =
-            self.version == VERSION_V4_STANDARD && self.record_size == RECORD_SIZE_V4_STANDARD;
-        let is_cmp =
-            self.version == VERSION_V4_COMPACT && self.record_size == RECORD_SIZE_V4_COMPACT;
+        let is_std = (self.version == VERSION_V4_STANDARD
+            || self.version == VERSION_V4_STANDARD_AOS
+            || self.version == VERSION_V4_STANDARD_SOA)
+            && self.record_size == RECORD_SIZE_V4_STANDARD;
+        let is_cmp = (self.version == VERSION_V4_COMPACT
+            || self.version == VERSION_V4_COMPACT_AOS
+            || self.version == VERSION_V4_COMPACT_SOA)
+            && self.record_size == RECORD_SIZE_V4_COMPACT;
         if !is_std && !is_cmp {
             return Err("Unsupported database version or mismatched record size");
         }
@@ -102,8 +172,13 @@ impl HeaderV4 {
 }
 
 /// Generation V5: Dual-Stack layout with both IPv4 and IPv6 support.
-pub const VERSION_V5_STANDARD: u16 = 5;
-pub const VERSION_V5_COMPACT: u16 = 0x0501;
+pub const VERSION_V5_STANDARD: u16 = 5; // Legacy V5 (5 or 0x0500)
+pub const VERSION_V5_STANDARD_AOS: u16 = 5;
+pub const VERSION_V5_STANDARD_SOA: u16 = 0x0502;
+pub const VERSION_V5_COMPACT_AOS: u16 = 0x0501; // Legacy 0x0501
+pub const VERSION_V5_COMPACT_SOA: u16 = 0x0503;
+pub const VERSION_V5_COMPACT: u16 = 0x0501; // Legacy V5 compact AoS compatibility alias
+
 pub const RECORD_SIZE_V6: u16 = 36;
 pub const HEADER_SIZE_V5: usize = 80;
 
@@ -140,8 +215,34 @@ pub const HEADER_FLAG_EMBEDDED_ZSTD: u16 = 1 << 2;
 
 impl HeaderV5 {
     #[inline(always)]
+    pub fn is_soa(&self) -> bool {
+        self.version == VERSION_V5_COMPACT_SOA || self.version == VERSION_V5_STANDARD_SOA
+    }
+
+    #[inline(always)]
     pub fn is_compact_v4(&self) -> bool {
-        self.version == VERSION_V5_COMPACT && self.record_size_v4 == RECORD_SIZE_V4_COMPACT
+        self.record_size_v4 == RECORD_SIZE_V4_COMPACT
+            || self.version == VERSION_V5_COMPACT
+            || self.version == VERSION_V5_COMPACT_AOS
+            || self.version == VERSION_V5_COMPACT_SOA
+    }
+
+    #[inline(always)]
+    pub fn family(&self) -> RecordFamily {
+        if self.is_compact_v4() {
+            RecordFamily::Compact
+        } else {
+            RecordFamily::Standard
+        }
+    }
+
+    #[inline(always)]
+    pub fn layout(&self) -> StorageLayout {
+        if self.is_soa() {
+            StorageLayout::Soa
+        } else {
+            StorageLayout::Aos
+        }
     }
 
     /// Returns true if the payload following the header is compressed via embedded Zstandard.
@@ -156,10 +257,14 @@ impl HeaderV5 {
             return Err("Invalid magic bytes (expected 'ATLS')");
         }
 
-        let is_std =
-            self.version == VERSION_V5_STANDARD && self.record_size_v4 == RECORD_SIZE_V4_STANDARD;
-        let is_cmp =
-            self.version == VERSION_V5_COMPACT && self.record_size_v4 == RECORD_SIZE_V4_COMPACT;
+        let is_std = (self.version == VERSION_V5_STANDARD
+            || self.version == VERSION_V5_STANDARD_AOS
+            || self.version == VERSION_V5_STANDARD_SOA)
+            && self.record_size_v4 == RECORD_SIZE_V4_STANDARD;
+        let is_cmp = (self.version == VERSION_V5_COMPACT
+            || self.version == VERSION_V5_COMPACT_AOS
+            || self.version == VERSION_V5_COMPACT_SOA)
+            && self.record_size_v4 == RECORD_SIZE_V4_COMPACT;
         if !is_std && !is_cmp {
             return Err("Unsupported Generation V5 version or mismatched record size");
         }

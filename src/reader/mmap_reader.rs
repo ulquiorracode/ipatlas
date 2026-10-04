@@ -7,9 +7,11 @@ use zerocopy::FromBytes;
 
 use crate::models::{
     compute_crc32, GeoFlags, GeoRecord, GeoRecordRef, HeaderV4, HeaderV5, ProfileV4, RangeV4,
-    RangeV4Compact, RangeV6, HEADER_SIZE_V4, HEADER_SIZE_V5, MAGIC, PROFILE_SIZE_V4,
-    RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD, RECORD_SIZE_V6, VERSION_V4_COMPACT,
-    VERSION_V4_STANDARD, VERSION_V5_COMPACT, VERSION_V5_STANDARD,
+    RangeV4Compact, RangeV6, RecordFamily, StorageLayout, HEADER_SIZE_V4, HEADER_SIZE_V5, MAGIC,
+    PROFILE_SIZE_V4, RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD, RECORD_SIZE_V6,
+    VERSION_V4_COMPACT_AOS, VERSION_V4_COMPACT_SOA, VERSION_V4_STANDARD, VERSION_V4_STANDARD_AOS,
+    VERSION_V4_STANDARD_SOA, VERSION_V5_COMPACT_AOS, VERSION_V5_COMPACT_SOA, VERSION_V5_STANDARD,
+    VERSION_V5_STANDARD_SOA,
 };
 
 #[derive(Error, Debug)]
@@ -89,7 +91,11 @@ impl IpAtlasReader {
         let version = u16::from_le_bytes([mmap[4], mmap[5]]);
 
         let (header, storage) = match version {
-            VERSION_V5_STANDARD | VERSION_V5_COMPACT => {
+            VERSION_V5_STANDARD
+            | 0x0500
+            | VERSION_V5_STANDARD_SOA
+            | VERSION_V5_COMPACT_AOS
+            | VERSION_V5_COMPACT_SOA => {
                 if file_len < HEADER_SIZE_V5 as u64 {
                     return Err(ReaderError::FileTooSmall(file_len));
                 }
@@ -124,7 +130,11 @@ impl IpAtlasReader {
                     (HeaderVariant::V5(h), StorageBuffer::Mmap(mmap))
                 }
             }
-            VERSION_V4_STANDARD | VERSION_V4_COMPACT => {
+            VERSION_V4_STANDARD
+            | VERSION_V4_STANDARD_AOS
+            | VERSION_V4_STANDARD_SOA
+            | VERSION_V4_COMPACT_AOS
+            | VERSION_V4_COMPACT_SOA => {
                 let h = HeaderV4::read_from_bytes(&mmap[..HEADER_SIZE_V4])
                     .map_err(|_| ReaderError::Corrupted("Failed to parse V4 header bytes"))?;
                 h.validate(file_len).map_err(ReaderError::Corrupted)?;
@@ -141,7 +151,43 @@ impl IpAtlasReader {
         // Pre-validate slices
         match &reader.header {
             HeaderVariant::V4(h) => {
-                if h.is_compact() {
+                if h.is_soa() {
+                    let total = h.total_records as usize;
+                    let start = HEADER_SIZE_V4;
+                    let ip_from_bytes = total * 4;
+                    <[u32]>::ref_from_bytes(&reader.mmap[start..start + ip_from_bytes]).map_err(
+                        |_| ReaderError::Corrupted("Unaligned or invalid SoA ip_from slice"),
+                    )?;
+                    if h.is_compact() {
+                        let counts_start = start + ip_from_bytes;
+                        let counts_bytes = total * 2;
+                        let prof_start = counts_start + counts_bytes;
+                        let prof_bytes = total * 2;
+                        <[u16]>::ref_from_bytes(
+                            &reader.mmap[counts_start..counts_start + counts_bytes],
+                        )
+                        .map_err(|_| {
+                            ReaderError::Corrupted("Unaligned or invalid SoA count slice")
+                        })?;
+                        <[u16]>::ref_from_bytes(&reader.mmap[prof_start..prof_start + prof_bytes])
+                            .map_err(|_| {
+                                ReaderError::Corrupted("Unaligned or invalid SoA profile_id slice")
+                            })?;
+                    } else {
+                        let to_start = start + ip_from_bytes;
+                        let to_bytes = total * 4;
+                        let prof_start = to_start + to_bytes;
+                        let prof_bytes = total * 4;
+                        <[u32]>::ref_from_bytes(&reader.mmap[to_start..to_start + to_bytes])
+                            .map_err(|_| {
+                                ReaderError::Corrupted("Unaligned or invalid SoA ip_to slice")
+                            })?;
+                        <[u32]>::ref_from_bytes(&reader.mmap[prof_start..prof_start + prof_bytes])
+                            .map_err(|_| {
+                                ReaderError::Corrupted("Unaligned or invalid SoA profile_id slice")
+                            })?;
+                    }
+                } else if h.is_compact() {
                     let start = HEADER_SIZE_V4;
                     let end =
                         start + (h.total_records as usize) * (RECORD_SIZE_V4_COMPACT as usize);
@@ -165,7 +211,43 @@ impl IpAtlasReader {
             HeaderVariant::V5(h) => {
                 let v4_start = HEADER_SIZE_V5;
                 let v4_end = v4_start + (h.total_records_v4 as usize) * (h.record_size_v4 as usize);
-                if h.is_compact_v4() {
+                if h.is_soa() {
+                    let total = h.total_records_v4 as usize;
+                    let ip_from_bytes = total * 4;
+                    <[u32]>::ref_from_bytes(&reader.mmap[v4_start..v4_start + ip_from_bytes])
+                        .map_err(|_| {
+                            ReaderError::Corrupted("Unaligned or invalid SoA ip_from slice")
+                        })?;
+                    if h.is_compact_v4() {
+                        let counts_start = v4_start + ip_from_bytes;
+                        let counts_bytes = total * 2;
+                        let prof_start = counts_start + counts_bytes;
+                        let prof_bytes = total * 2;
+                        <[u16]>::ref_from_bytes(
+                            &reader.mmap[counts_start..counts_start + counts_bytes],
+                        )
+                        .map_err(|_| {
+                            ReaderError::Corrupted("Unaligned or invalid SoA count slice")
+                        })?;
+                        <[u16]>::ref_from_bytes(&reader.mmap[prof_start..prof_start + prof_bytes])
+                            .map_err(|_| {
+                                ReaderError::Corrupted("Unaligned or invalid SoA profile_id slice")
+                            })?;
+                    } else {
+                        let to_start = v4_start + ip_from_bytes;
+                        let to_bytes = total * 4;
+                        let prof_start = to_start + to_bytes;
+                        let prof_bytes = total * 4;
+                        <[u32]>::ref_from_bytes(&reader.mmap[to_start..to_start + to_bytes])
+                            .map_err(|_| {
+                                ReaderError::Corrupted("Unaligned or invalid SoA ip_to slice")
+                            })?;
+                        <[u32]>::ref_from_bytes(&reader.mmap[prof_start..prof_start + prof_bytes])
+                            .map_err(|_| {
+                                ReaderError::Corrupted("Unaligned or invalid SoA profile_id slice")
+                            })?;
+                    }
+                } else if h.is_compact_v4() {
                     <[RangeV4Compact]>::ref_from_bytes(&reader.mmap[v4_start..v4_end]).map_err(
                         |_| ReaderError::Corrupted("Unaligned or invalid RangeV4Compact slice"),
                     )?;
@@ -309,9 +391,149 @@ impl IpAtlasReader {
         }
     }
 
+    /// Returns true if the database is in Structure of Arrays (SoA) layout.
+    #[inline(always)]
+    pub fn is_soa(&self) -> bool {
+        match &self.header {
+            HeaderVariant::V4(h) => h.is_soa(),
+            HeaderVariant::V5(h) => h.is_soa(),
+        }
+    }
+
+    /// Physical memory layout.
+    #[inline(always)]
+    pub fn layout(&self) -> StorageLayout {
+        if self.is_soa() {
+            StorageLayout::Soa
+        } else {
+            StorageLayout::Aos
+        }
+    }
+
+    /// Record family.
+    #[inline(always)]
+    pub fn family(&self) -> RecordFamily {
+        if self.is_compact() {
+            RecordFamily::Compact
+        } else {
+            RecordFamily::Standard
+        }
+    }
+
+    /// Zero-copy verified slice of SoA IPv4 starting addresses (`ip_from`).
+    #[inline(always)]
+    pub fn soa_ip_froms_v4(&self) -> &[u32] {
+        if !self.is_soa() {
+            return &[];
+        }
+        match &self.header {
+            HeaderVariant::V4(h) => {
+                let start = HEADER_SIZE_V4;
+                let end = start + (h.total_records as usize) * 4;
+                <[u32]>::ref_from_bytes(&self.mmap[start..end]).unwrap_or(&[])
+            }
+            HeaderVariant::V5(h) => {
+                let start = HEADER_SIZE_V5;
+                let end = start + (h.total_records_v4 as usize) * 4;
+                <[u32]>::ref_from_bytes(&self.mmap[start..end]).unwrap_or(&[])
+            }
+        }
+    }
+
+    /// Zero-copy verified slice of SoA Compact IPv4 interval counts (`u16`).
+    #[inline(always)]
+    pub fn soa_counts_v4(&self) -> &[u16] {
+        if !self.is_soa() || !self.is_compact() {
+            return &[];
+        }
+        match &self.header {
+            HeaderVariant::V4(h) => {
+                let total = h.total_records as usize;
+                let start = HEADER_SIZE_V4 + total * 4;
+                let end = start + total * 2;
+                <[u16]>::ref_from_bytes(&self.mmap[start..end]).unwrap_or(&[])
+            }
+            HeaderVariant::V5(h) => {
+                let total = h.total_records_v4 as usize;
+                let start = HEADER_SIZE_V5 + total * 4;
+                let end = start + total * 2;
+                <[u16]>::ref_from_bytes(&self.mmap[start..end]).unwrap_or(&[])
+            }
+        }
+    }
+
+    /// Zero-copy verified slice of SoA Compact IPv4 profile IDs (`u16`).
+    #[inline(always)]
+    pub fn soa_profile_ids_compact_v4(&self) -> &[u16] {
+        if !self.is_soa() || !self.is_compact() {
+            return &[];
+        }
+        match &self.header {
+            HeaderVariant::V4(h) => {
+                let total = h.total_records as usize;
+                let start = HEADER_SIZE_V4 + total * 6;
+                let end = start + total * 2;
+                <[u16]>::ref_from_bytes(&self.mmap[start..end]).unwrap_or(&[])
+            }
+            HeaderVariant::V5(h) => {
+                let total = h.total_records_v4 as usize;
+                let start = HEADER_SIZE_V5 + total * 6;
+                let end = start + total * 2;
+                <[u16]>::ref_from_bytes(&self.mmap[start..end]).unwrap_or(&[])
+            }
+        }
+    }
+
+    /// Zero-copy verified slice of SoA Standard IPv4 ending addresses (`ip_to`, `u32`).
+    #[inline(always)]
+    pub fn soa_ip_tos_standard_v4(&self) -> &[u32] {
+        if !self.is_soa() || self.is_compact() {
+            return &[];
+        }
+        match &self.header {
+            HeaderVariant::V4(h) => {
+                let total = h.total_records as usize;
+                let start = HEADER_SIZE_V4 + total * 4;
+                let end = start + total * 4;
+                <[u32]>::ref_from_bytes(&self.mmap[start..end]).unwrap_or(&[])
+            }
+            HeaderVariant::V5(h) => {
+                let total = h.total_records_v4 as usize;
+                let start = HEADER_SIZE_V5 + total * 4;
+                let end = start + total * 4;
+                <[u32]>::ref_from_bytes(&self.mmap[start..end]).unwrap_or(&[])
+            }
+        }
+    }
+
+    /// Zero-copy verified slice of SoA Standard IPv4 profile IDs (`u32`).
+    #[inline(always)]
+    pub fn soa_profile_ids_standard_v4(&self) -> &[u32] {
+        if !self.is_soa() || self.is_compact() {
+            return &[];
+        }
+        match &self.header {
+            HeaderVariant::V4(h) => {
+                let total = h.total_records as usize;
+                let start = HEADER_SIZE_V4 + total * 8;
+                let end = start + total * 4;
+                <[u32]>::ref_from_bytes(&self.mmap[start..end]).unwrap_or(&[])
+            }
+            HeaderVariant::V5(h) => {
+                let total = h.total_records_v4 as usize;
+                let start = HEADER_SIZE_V5 + total * 8;
+                let end = start + total * 4;
+                <[u32]>::ref_from_bytes(&self.mmap[start..end]).unwrap_or(&[])
+            }
+        }
+    }
+
     /// Zero-copy verified slice of standard V4 ranges (12 bytes per record).
     #[inline(always)]
     pub fn ranges(&self) -> &[RangeV4] {
+        if self.is_soa() {
+            return &[];
+        }
         match &self.header {
             HeaderVariant::V4(h) => {
                 if h.is_compact() {
@@ -339,6 +561,9 @@ impl IpAtlasReader {
     /// Zero-copy verified slice of compact V4 ranges (8 bytes per record).
     #[inline(always)]
     pub fn ranges_compact(&self) -> &[RangeV4Compact] {
+        if self.is_soa() {
+            return &[];
+        }
         match &self.header {
             HeaderVariant::V4(h) => {
                 if h.is_compact() {
@@ -499,7 +724,52 @@ impl IpAtlasReader {
             return None;
         }
 
-        if self.is_compact() {
+        if self.is_soa() {
+            let ip_froms = self.soa_ip_froms_v4();
+            let idx = match ip_froms.binary_search(&ip) {
+                Ok(i) => i,
+                Err(0) => return None,
+                Err(i) => i - 1,
+            };
+            let ip_from = ip_froms[idx];
+
+            let (ip_to, profile_id) = if self.is_compact() {
+                let counts = self.soa_counts_v4();
+                let count = *counts.get(idx)?;
+                let to = ip_from.saturating_add(count as u32);
+                if ip > to {
+                    return None;
+                }
+                let prof_ids = self.soa_profile_ids_compact_v4();
+                (to, *prof_ids.get(idx)? as usize)
+            } else {
+                let tos = self.soa_ip_tos_standard_v4();
+                let to = *tos.get(idx)?;
+                if ip > to {
+                    return None;
+                }
+                let prof_ids = self.soa_profile_ids_standard_v4();
+                (to, *prof_ids.get(idx)? as usize)
+            };
+
+            let profiles = self.profiles();
+            let prof = profiles.get(profile_id)?;
+
+            Some(GeoRecordRef {
+                ip: IpAddr::V4(Ipv4Addr::from(ip)),
+                ip_from: ip_from as u128,
+                ip_to: ip_to as u128,
+                is_v6: false,
+                country: prof.country_code(),
+                region: self.get_region(prof.reg_idx as usize),
+                city: self.get_city(prof.city_idx as usize),
+                isp: self.get_isp(prof.isp_idx as usize),
+                asn: prof.asn,
+                latitude: prof.latitude(),
+                longitude: prof.longitude(),
+                flags: self.decode_flags(prof.flags),
+            })
+        } else if self.is_compact() {
             let ranges = self.ranges_compact();
             let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
                 Ok(i) => i,
@@ -631,5 +901,268 @@ impl IpAtlasReader {
     pub fn lookup_str(&self, ip_str: &str) -> Option<GeoRecord> {
         let ip: IpAddr = ip_str.parse().ok()?;
         self.lookup(ip)
+    }
+
+    /// Advises kernel to prioritize random access reading and warms up memory pages into RAM.
+    pub fn warmup(&self) {
+        #[cfg(unix)]
+        {
+            if let StorageBuffer::Mmap(ref m) = self.mmap {
+                unsafe {
+                    libc::madvise(m.as_ptr() as *mut libc::c_void, m.len(), libc::MADV_RANDOM);
+                    libc::madvise(
+                        m.as_ptr() as *mut libc::c_void,
+                        m.len(),
+                        libc::MADV_WILLNEED,
+                    );
+                }
+            }
+        }
+        // Force paging of ranges and profile tables
+        if self.is_soa() {
+            let ip_froms = self.soa_ip_froms_v4();
+            if !ip_froms.is_empty() {
+                let _ = std::hint::black_box(ip_froms[0]);
+                let _ = std::hint::black_box(ip_froms[ip_froms.len() / 2]);
+                let _ = std::hint::black_box(ip_froms[ip_froms.len() - 1]);
+            }
+        } else if self.is_compact() {
+            let ranges = self.ranges_compact();
+            if !ranges.is_empty() {
+                let _ = std::hint::black_box(ranges[0].ip_from);
+                let _ = std::hint::black_box(ranges[ranges.len() / 2].ip_from);
+                let _ = std::hint::black_box(ranges[ranges.len() - 1].ip_from);
+            }
+        } else {
+            let ranges = self.ranges();
+            if !ranges.is_empty() {
+                let _ = std::hint::black_box(ranges[0].ip_from);
+                let _ = std::hint::black_box(ranges[ranges.len() / 2].ip_from);
+                let _ = std::hint::black_box(ranges[ranges.len() - 1].ip_from);
+            }
+        }
+        let profiles = self.profiles();
+        if !profiles.is_empty() {
+            let _ = std::hint::black_box(profiles[0].flags);
+            let _ = std::hint::black_box(profiles[profiles.len() - 1].flags);
+        }
+    }
+
+    /// Fast-path lookup returning only threat/usage flags for an IPv4 address.
+    /// Performs zero string resolution (`memchr`) and zero UTF-8 validation.
+    #[inline]
+    pub fn lookup_flags_u32(&self, ip: u32) -> Option<GeoFlags> {
+        if self.len_v4() == 0 {
+            return None;
+        }
+
+        if self.is_soa() {
+            let ip_froms = self.soa_ip_froms_v4();
+            let idx = match ip_froms.binary_search(&ip) {
+                Ok(i) => i,
+                Err(0) => return None,
+                Err(i) => i - 1,
+            };
+            let ip_from = ip_froms[idx];
+
+            let profile_id = if self.is_compact() {
+                let counts = self.soa_counts_v4();
+                let count = *counts.get(idx)?;
+                if ip > ip_from.saturating_add(count as u32) {
+                    return None;
+                }
+                let prof_ids = self.soa_profile_ids_compact_v4();
+                *prof_ids.get(idx)? as usize
+            } else {
+                let tos = self.soa_ip_tos_standard_v4();
+                if ip > *tos.get(idx)? {
+                    return None;
+                }
+                let prof_ids = self.soa_profile_ids_standard_v4();
+                *prof_ids.get(idx)? as usize
+            };
+
+            let profiles = self.profiles();
+            let prof = profiles.get(profile_id)?;
+            Some(self.decode_flags(prof.flags))
+        } else if self.is_compact() {
+            let ranges = self.ranges_compact();
+            let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
+                Ok(i) => i,
+                Err(0) => return None,
+                Err(i) => i - 1,
+            };
+            let range = ranges.get(idx)?;
+            if !range.contains(ip) {
+                return None;
+            }
+            let profiles = self.profiles();
+            let prof = profiles.get(range.profile_id as usize)?;
+            Some(self.decode_flags(prof.flags))
+        } else {
+            let ranges = self.ranges();
+            let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
+                Ok(i) => i,
+                Err(0) => return None,
+                Err(i) => i - 1,
+            };
+            let range = ranges.get(idx)?;
+            if !range.contains(ip) {
+                return None;
+            }
+            let profiles = self.profiles();
+            let prof = profiles.get(range.profile_id as usize)?;
+            Some(self.decode_flags(prof.flags))
+        }
+    }
+
+    /// Fast-path lookup returning only threat/usage flags for an IPv6 address.
+    #[inline]
+    pub fn lookup_flags_u128(&self, ip: u128) -> Option<GeoFlags> {
+        let ranges = self.ranges_v6();
+        if ranges.is_empty() {
+            return None;
+        }
+
+        let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
+            Ok(i) => i,
+            Err(0) => return None,
+            Err(i) => i - 1,
+        };
+        let range = ranges.get(idx)?;
+        if !range.contains(ip) {
+            return None;
+        }
+        let profiles = self.profiles();
+        let prof = profiles.get(range.profile_id as usize)?;
+        Some(self.decode_flags(prof.flags))
+    }
+
+    /// Fast-path lookup returning only threat/usage flags for an `IpAddr`.
+    #[inline]
+    pub fn lookup_flags_addr(&self, ip: IpAddr) -> Option<GeoFlags> {
+        match ip {
+            IpAddr::V4(v4) => self.lookup_flags_u32(u32::from(v4)),
+            IpAddr::V6(v6) => {
+                let ip_u128 = u128::from(v6);
+                if let Some(flags) = self.lookup_flags_u128(ip_u128) {
+                    Some(flags)
+                } else if let Some(v4) = v6.to_ipv4_mapped() {
+                    self.lookup_flags_u32(u32::from(v4))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Fast-path lookup returning only threat/usage flags for an IP address.
+    #[inline(always)]
+    pub fn lookup_flags(&self, ip: impl Into<IpAddr>) -> Option<GeoFlags> {
+        self.lookup_flags_addr(ip.into())
+    }
+
+    /// Returns ISO 2-letter country code directly without resolving city, region, or ISP strings.
+    #[inline]
+    pub fn lookup_country_code_u32(&self, ip: u32) -> Option<&str> {
+        if self.len_v4() == 0 {
+            return None;
+        }
+
+        if self.is_soa() {
+            let ip_froms = self.soa_ip_froms_v4();
+            let idx = match ip_froms.binary_search(&ip) {
+                Ok(i) => i,
+                Err(0) => return None,
+                Err(i) => i - 1,
+            };
+            let ip_from = ip_froms[idx];
+
+            let profile_id = if self.is_compact() {
+                let counts = self.soa_counts_v4();
+                let count = *counts.get(idx)?;
+                if ip > ip_from.saturating_add(count as u32) {
+                    return None;
+                }
+                let prof_ids = self.soa_profile_ids_compact_v4();
+                *prof_ids.get(idx)? as usize
+            } else {
+                let tos = self.soa_ip_tos_standard_v4();
+                if ip > *tos.get(idx)? {
+                    return None;
+                }
+                let prof_ids = self.soa_profile_ids_standard_v4();
+                *prof_ids.get(idx)? as usize
+            };
+
+            let profiles = self.profiles();
+            profiles.get(profile_id).map(|p| p.country_code())
+        } else if self.is_compact() {
+            let ranges = self.ranges_compact();
+            let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
+                Ok(i) => i,
+                Err(0) => return None,
+                Err(i) => i - 1,
+            };
+            let range = ranges.get(idx)?;
+            if !range.contains(ip) {
+                return None;
+            }
+            let profiles = self.profiles();
+            profiles
+                .get(range.profile_id as usize)
+                .map(|p| p.country_code())
+        } else {
+            let ranges = self.ranges();
+            let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
+                Ok(i) => i,
+                Err(0) => return None,
+                Err(i) => i - 1,
+            };
+            let range = ranges.get(idx)?;
+            if !range.contains(ip) {
+                return None;
+            }
+            let profiles = self.profiles();
+            profiles
+                .get(range.profile_id as usize)
+                .map(|p| p.country_code())
+        }
+    }
+
+    /// Fast-path boolean predicate: returns true if the IPv4 is a known threat (Proxy, VPN, Tor, Botnet, Spam).
+    #[inline(always)]
+    pub fn is_threat_u32(&self, ip: u32) -> bool {
+        self.lookup_flags_u32(ip).is_some_and(|f| f.is_threat())
+    }
+
+    /// Fast-path boolean predicate: returns true if the IP is a known threat.
+    #[inline(always)]
+    pub fn is_threat(&self, ip: impl Into<IpAddr>) -> bool {
+        self.lookup_flags(ip).is_some_and(|f| f.is_threat())
+    }
+
+    /// Fast-path boolean predicate: returns true if the IPv4 is a proxy, VPN, or Tor node.
+    #[inline(always)]
+    pub fn is_proxy_u32(&self, ip: u32) -> bool {
+        self.lookup_flags_u32(ip).is_some_and(|f| f.is_proxy())
+    }
+
+    /// Fast-path boolean predicate: returns true if the IP is a proxy, VPN, or Tor node.
+    #[inline(always)]
+    pub fn is_proxy(&self, ip: impl Into<IpAddr>) -> bool {
+        self.lookup_flags(ip).is_some_and(|f| f.is_proxy())
+    }
+
+    /// Fast-path boolean predicate: returns true if the IPv4 belongs to a datacenter / cloud provider.
+    #[inline(always)]
+    pub fn is_datacenter_u32(&self, ip: u32) -> bool {
+        self.lookup_flags_u32(ip).is_some_and(|f| f.is_datacenter())
+    }
+
+    /// Fast-path boolean predicate: returns true if the IP belongs to a datacenter / cloud provider.
+    #[inline(always)]
+    pub fn is_datacenter(&self, ip: impl Into<IpAddr>) -> bool {
+        self.lookup_flags(ip).is_some_and(|f| f.is_datacenter())
     }
 }

@@ -148,6 +148,15 @@ impl GeoFlags {
             != 0
     }
 
+    #[inline(always)]
+    pub fn is_threat(&self) -> bool {
+        self.is_proxy()
+            || self.is_datacenter()
+            || self.is_botnet()
+            || self.is_scanner()
+            || self.is_spam()
+    }
+
     /// Converts legacy Generation V4 packed flags to Generation V5 layout.
     ///
     /// Legacy V4 bitmask:

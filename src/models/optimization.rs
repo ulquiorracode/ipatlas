@@ -17,7 +17,11 @@ pub enum OptRule {
     CompactRanges,
     /// Compress payload via embedded Zstandard frame (zstd-19) for minimal disk footprint.
     EmbeddedZstd,
+    /// Structure of Arrays physical storage layout.
+    SoaLayout,
 }
+
+use crate::models::header::{RecordFamily, StorageLayout};
 
 /// Optimization configuration representing chosen compiler transformation flags.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,6 +34,8 @@ pub struct OptimizationConfig {
     pub collapse_threats: bool,
     pub compact_ranges: bool,
     pub embedded_zstd: bool,
+    pub layout: StorageLayout,
+    pub family: RecordFamily,
 }
 
 impl Default for OptimizationConfig {
@@ -51,6 +57,8 @@ impl OptimizationConfig {
             collapse_threats: false,
             compact_ranges: false,
             embedded_zstd: false,
+            layout: StorageLayout::Aos,
+            family: RecordFamily::Standard,
         }
     }
 
@@ -65,6 +73,8 @@ impl OptimizationConfig {
             collapse_threats: false,
             compact_ranges: false,
             embedded_zstd: false,
+            layout: StorageLayout::Aos,
+            family: RecordFamily::Standard,
         }
     }
 
@@ -79,6 +89,8 @@ impl OptimizationConfig {
             collapse_threats: false,
             compact_ranges: false,
             embedded_zstd: false,
+            layout: StorageLayout::Aos,
+            family: RecordFamily::Standard,
         }
     }
 
@@ -93,6 +105,8 @@ impl OptimizationConfig {
             collapse_threats: false,
             compact_ranges: false,
             embedded_zstd: false,
+            layout: StorageLayout::Aos,
+            family: RecordFamily::Standard,
         }
     }
 
@@ -135,13 +149,37 @@ impl OptimizationConfig {
                 "lossy-coords" | "lossy" => self.lossy_coords = true,
                 "prune-empty" => self.prune_empty = true,
                 "collapse-threats" => self.collapse_threats = true,
-                "compact" | "compact-ranges" | "v4.1" | "v4-compact" => self.compact_ranges = true,
+                "compact" | "compact-ranges" | "v4.1" | "v4-compact" => {
+                    self.compact_ranges = true;
+                    self.family = RecordFamily::Compact;
+                }
+                "standard" => {
+                    self.compact_ranges = false;
+                    self.family = RecordFamily::Standard;
+                }
+                "soa" | "structure-of-arrays" => self.layout = StorageLayout::Soa,
+                "aos" | "array-of-structures" => self.layout = StorageLayout::Aos,
                 "zstd" | "embedded-zstd" => self.embedded_zstd = true,
-                other => return Err(format!("Unknown optimization rule or level: '{}'. Available: 0, 1, 2, 3, coalesce, normalize-strings, lossy-coords, prune-empty, collapse-threats, compact-ranges, embedded-zstd", other)),
+                other => return Err(format!("Unknown optimization rule or level: '{}'. Available: 0, 1, 2, 3, coalesce, normalize-strings, lossy-coords, prune-empty, collapse-threats, compact-ranges, soa, aos, embedded-zstd", other)),
             }
         }
         Ok(())
     }
+}
+
+/// Computes the optimal record count for a compressed chunk based on record byte size.
+///
+/// Designed to align with CPU L1/L2 cache line size (64 bytes) and L2 residency (target ~64 KB chunk size).
+/// For 8-byte compact records: 8,192 records = 65,536 bytes (1,024 cache lines).
+/// For 12-byte standard records: 5,461 records = 65,532 bytes.
+/// For 36-byte IPv6 records: 1,820 records = 65,520 bytes.
+#[inline(always)]
+pub fn calculate_chunk_records_count(record_size: usize, target_chunk_bytes: usize) -> usize {
+    if record_size == 0 {
+        return 0;
+    }
+    // Align chunk capacity down to a multiple of whole structures
+    (target_chunk_bytes / record_size).max(1)
 }
 
 /// Symmetrically quantizes fixed-point coordinates to nearest multiple of 10 (~10km) without zero-truncation bias.

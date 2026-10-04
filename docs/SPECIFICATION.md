@@ -14,15 +14,37 @@ All IPAtlas binary artifacts start with a 32-byte or 64-byte aligned header.
 
 ---
 
-## 2. Layout Tiers Matrix
+## 2. Orthogonal 3D Format Matrix & Layout Tiers
+ 
+IPAtlas structures its physical database containers across three orthogonal dimensions:
+- **Generation**: `V4` (legacy/IPv4-focused, 64-byte header) vs `V5` (dual-stack IPv4+IPv6, 80-byte header).
+- **Family**: `Standard` (12B per range, 32-bit profile index) vs `Compact` (8B per range, 16-bit count + profile index) vs `Succinct` (Elias-Fano bitvector).
+- **Layout**: `AoS` (Array of Structures: interleaved range records) vs `SoA` (Structure of Arrays: decoupled columnar slices).
 
-IPAtlas provides three distinct layout tiers designed around the trade-off between memory footprint, zero-copy alignment, and CPU cache locality:
+### 2.1 Version Code Matrix
 
-| Tier | Status | Record Size | Primary Structure | 5.3M Production RAM | Shannon Ratio | Hot L1 Latency | Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$) | vs MaxMind MMDB |
+| Generation | Family | Layout | Container Version Constant | Hex Code | Dec Code |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **V4** | Standard | AoS | `VERSION_V4_STANDARD` / `VERSION_V4_STANDARD_AOS` | `0x0400` | 1024 |
+| **V4** | Compact | AoS | `VERSION_V4_COMPACT` / `VERSION_V4_COMPACT_AOS` | `0x0401` | 1025 |
+| **V4** | Standard | SoA | `VERSION_V4_STANDARD_SOA` | `0x0402` | 1026 |
+| **V4** | Compact | SoA | `VERSION_V4_COMPACT_SOA` | `0x0403` | 1027 |
+| **V5** | Standard | AoS | `VERSION_V5_STANDARD` / `VERSION_V5_STANDARD_AOS` | `0x0005` | 5 |
+| **V5** | Compact | AoS | `VERSION_V5_COMPACT` / `VERSION_V5_COMPACT_AOS` | `0x0501` | 1281 |
+| **V5** | Standard | SoA | `VERSION_V5_STANDARD_SOA` | `0x0502` | 1282 |
+| **V5** | Compact | SoA | `VERSION_V5_COMPACT_SOA` | `0x0503` | 1283 |
+
+---
+
+## 3. Performance & Efficiency Matrix
+
+| Tier & Layout | Status | Record Size | Primary Structure | 5.3M Production RAM | Shannon Ratio | Hot L1 Latency | Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$) | vs MaxMind MMDB |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **MaxMind MMDB** *(Baseline)* | Industry Standard | ~22 bytes (tree) | Radix Trie (Chasing) | **115.0 MB** | $6.50 \times H_{\text{raw}}$ | **1,100 ns** | **$126,500\text{ MB}\cdot\text{ns}$** (1.0x baseline) | Reference |
-| **Tier 1: `V4/V5-Standard`** | **Production** | 12 bytes | `RangeV4` | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **66.7 ns** | **$4,075\text{ MB}\cdot\text{ns}$** | **31.0x more efficient** |
-| **Tier 2: `V4/V5-Compact`** | **Production** | 8 bytes | `RangeV4Compact` | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **60.9 ns** | **$2,515\text{ MB}\cdot\text{ns}$** *(Peak Hardware Sweet Spot)* | **50.3x more efficient** |
+| **Tier 1: `V4/V5-Standard (AoS)`** | **Production** | 12 bytes | `RangeV4` | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **66.7 ns** | **$4,075\text{ MB}\cdot\text{ns}$** | **31.0x more efficient** |
+| **Tier 2: `V4/V5-Compact (AoS)`** | **Production** | 8 bytes | `RangeV4Compact` | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **60.9 ns** | **$2,515\text{ MB}\cdot\text{ns}$** | **50.3x more efficient** |
+| **Tier 2: `V4/V5-Compact (SoA)`** | **Production** | 8 bytes (columnar) | `soa_ip_from` + `count` + `profile` | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **15.4 ns** | **$636\text{ MB}\cdot\text{ns}$** *(Peak Hardware Sweet Spot)* | **198.8x more efficient** |
+| **Flags-Only Fast Path (SoA/AoS)** | **Production** | 0B (direct slice) | `lookup_flags_u32` (no strings) | N/A | N/A | **18.5 ns** | N/A | Edge Firewall Mode |
 | **Tier 3: `V5-Succinct`** | **Experimental** *(Non-Prod)* | $\sim 2.8$ bytes | Elias-Fano Bitvector | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
 
 ### 2.1 Benchmark Testbed & Reproduction Conditions

@@ -4,8 +4,8 @@ use std::time::Instant;
 use clap::{Args, Parser, Subcommand};
 use ipatlas::{
     compile, CompilerOptions, FeatureMask, IpAtlasPipelineExt, IpAtlasReader, LookupContext,
-    LookupIntent, OptimizationConfig, Preset, RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD,
-    RECORD_SIZE_V6,
+    LookupIntent, OptimizationConfig, Preset, RecordFamily, StorageLayout, RECORD_SIZE_V4_COMPACT,
+    RECORD_SIZE_V4_STANDARD, RECORD_SIZE_V6,
 };
 
 #[derive(Parser)]
@@ -46,11 +46,15 @@ struct CompileArgs {
     #[arg(long)]
     features: Option<String>,
 
-    /// Memory layout: standard (12B V4 / 36B V6) or compact (8B V4 / 36B V6)
-    #[arg(long, default_value = "standard")]
+    /// Record family: standard (12B V4 / 36B V6) or compact (8B V4 / 36B V6)
+    #[arg(long, default_value = "compact", aliases = ["tier"])]
+    family: String,
+
+    /// Physical memory layout: aos (Array of Structures) or soa (Structure of Arrays)
+    #[arg(long, default_value = "aos")]
     layout: String,
 
-    /// Optimization flags/level: -O0, -O1, -O2, -O3, or comma-separated rules (coalesce, lossy-coords, normalize-strings, compact-ranges)
+    /// Optimization flags/level: -O0, -O1, -O2, -O3, or comma-separated rules (coalesce, lossy-coords, normalize-strings, compact-ranges, soa, aos)
     #[arg(short = 'O', long = "opt")]
     optimization: Vec<String>,
 
@@ -161,8 +165,22 @@ fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
 
     // Optimization flags
     let mut opt_config = OptimizationConfig::default();
-    if args.layout.to_lowercase() == "compact" || args.layout.to_lowercase() == "v4.1" {
-        opt_config.compact_ranges = true;
+    match args.family.to_lowercase().as_str() {
+        "compact" | "v4.1" => {
+            opt_config.compact_ranges = true;
+            opt_config.family = RecordFamily::Compact;
+        }
+        "standard" | "v4" => {
+            opt_config.compact_ranges = false;
+            opt_config.family = RecordFamily::Standard;
+        }
+        other => anyhow::bail!("Unknown family: '{}'. Available: compact, standard", other),
+    }
+
+    match args.layout.to_lowercase().as_str() {
+        "soa" | "structure-of-arrays" => opt_config.layout = StorageLayout::Soa,
+        "aos" | "array-of-structures" => opt_config.layout = StorageLayout::Aos,
+        other => anyhow::bail!("Unknown layout: '{}'. Available: aos, soa", other),
     }
 
     if args.embedded_zstd {
@@ -202,14 +220,18 @@ fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
         anyhow::bail!("Compilation requires at least one dataset input (--geo, --proxy, --geo-v6, --proxy-v6)");
     }
 
-    let layout_label = if opt_config.compact_ranges {
-        "Generation V5 Compact (8B V4 / 36B V6)"
+    let family_label = if opt_config.compact_ranges {
+        "Compact (8B V4 / 36B V6)"
     } else {
-        "Generation V5 Standard (12B V4 / 36B V6)"
+        "Standard (12B V4 / 36B V6)"
+    };
+    let layout_label = match opt_config.layout {
+        StorageLayout::Aos => "AoS (Array of Structures)",
+        StorageLayout::Soa => "SoA (Structure of Arrays)",
     };
     println!(
-        "Compiling IPAtlas Database [Layout: {} | Feature Mask: {:#06x}]...",
-        layout_label, feature_mask.0
+        "Compiling IPAtlas Database [Generation V5 | Family: {} | Layout: {} | Feature Mask: {:#06x}]...",
+        family_label, layout_label, feature_mask.0
     );
     println!("Optimization Configuration: {:?}", opt_config);
 
@@ -371,17 +393,36 @@ fn run_info(args: InfoArgs) -> anyhow::Result<()> {
     let size_mb = (file_size as f64) / (1024.0 * 1024.0);
     let reader = IpAtlasReader::open(&args.database)?;
 
-    let is_v5 = reader.version() >= 5;
+    let is_v5 = reader.version() >= 5 || reader.version() >= 0x0500;
     let version_name = match reader.version() {
-        5 => "Generation V5 (Standard Dual-Stack: 12B V4 / 36B V6)",
-        0x0501 => "Generation V5 (Compact Dual-Stack: 8B V4 / 36B V6)",
-        4 => "Generation V4 (Standard IPv4: 12B/range)",
-        0x0401 => "Generation V4 (Compact IPv4: 8B/range)",
+        0x0503 => "Generation V5 (Compact SoA Dual-Stack: 8B V4 / 36B V6)",
+        0x0502 => "Generation V5 (Standard SoA Dual-Stack: 12B V4 / 36B V6)",
+        0x0501 => "Generation V5 (Compact AoS Dual-Stack: 8B V4 / 36B V6)",
+        0x0500 | 5 => "Generation V5 (Standard AoS Dual-Stack: 12B V4 / 36B V6)",
+        0x0403 => "Generation V4 (Compact SoA IPv4: 8B/range)",
+        0x0402 => "Generation V4 (Standard SoA IPv4: 12B/range)",
+        0x0401 => "Generation V4 (Compact AoS IPv4: 8B/range)",
+        0x0400 | 4 => "Generation V4 (Standard AoS IPv4: 12B/range)",
         v => Box::leak(format!("Version {:#06x}", v).into_boxed_str()),
     };
 
     println!("Database:       {:?}", args.database);
     println!("Format:         {}", version_name);
+    println!(
+        "Layout:         {}",
+        match reader.layout() {
+            StorageLayout::Aos => "AoS (Array of Structures)",
+            StorageLayout::Soa => "SoA (Structure of Arrays)",
+        }
+    );
+    println!(
+        "Family:         {}",
+        match reader.family() {
+            RecordFamily::Compact => "Compact (8B V4)",
+            RecordFamily::Standard => "Standard (12B V4)",
+            RecordFamily::Succinct => "Succinct (Elias-Fano)",
+        }
+    );
     println!("Total Records:  {}", format_num(reader.len()));
     println!("  IPv4 Records: {}", format_num(reader.len_v4()));
     println!("  IPv6 Records: {}", format_num(reader.len_v6()));

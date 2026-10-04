@@ -109,17 +109,19 @@ IPAtlas provides distinct layout tiers designed around the trade-off between mem
 | Layout Tier | Status | Record Size | 5.3M Table RAM | Shannon Ratio | Hot L1 Latency | Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$) | vs MaxMind MMDB |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **MaxMind MMDB** *(Baseline)* | Industry Standard | ~22 bytes (tree) | **115.0 MB** | $6.50 \times H_{\text{raw}}$ | **1,100 ns** | **$126,500\text{ MB}\cdot\text{ns}$** (1.0x baseline) | Reference |
-| **`V4/V5-Standard`** *(Default)* | **Production** | 12 bytes | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **66.7 ns** | **$4,075\text{ MB}\cdot\text{ns}$** | **31.0x more efficient** |
-| **`V4/V5-Compact`** (`--layout compact`) | **Production** | 8 bytes | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **60.9 ns** | **$2,515\text{ MB}\cdot\text{ns}$** *(Peak Hardware Sweet Spot)* | **50.3x more efficient** |
+| **`V4/V5-Standard (AoS)`** | **Production** | 12 bytes | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **66.7 ns** | **$4,075\text{ MB}\cdot\text{ns}$** | **31.0x more efficient** |
+| **`V4/V5-Compact (AoS)`** | **Production** | 8 bytes | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **60.9 ns** | **$2,515\text{ MB}\cdot\text{ns}$** | **50.3x more efficient** |
+| **`V4/V5-Compact (SoA)`** (`--layout soa`) | **Production** | 8 bytes (columnar) | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **15.4 ns** | **$636\text{ MB}\cdot\text{ns}$** *(Peak Hardware Sweet Spot)* | **198.8x more efficient** |
+| **Flags-Only Fast Path** | **Production** | Zero-allocation | N/A | N/A | **18.5 ns** | N/A | **Edge Firewall Mode** |
 | **`V5-Succinct`** *(Shannon Bound)* | **Experimental** *(Non-Prod)* | ~2.8 bytes (E-F) | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
 
 > **Benchmark Hardware & Testbed**: Measured on x86_64 CPU (3.60 GHz base, AVX2 enabled, 32KB L1d / 512KB L2 cache) on Windows 11 / Ubuntu 22.04 LTS kernel 6.5 using Criterion.rs 0.5.1 with 1M warmups and 1024 pseudo-randomized addresses. Evaluated against global 5,318,878 post-coalesced interval catalog (IP2Location DB5 + IP2Proxy PX10 snapshot; uncoalesced raw multi-provider sources span ~7.9M intervals, reduced by `-O1` coalescing).
 >
-> **Experimental Designation**: `V5-Succinct` is strictly an **experimental research tier** for extreme memory-constrained devices (16MB routers). For all production services and edge reverse proxies, **`V4/V5-Compact`** is the recommended default.
+> **Experimental Designation**: `V5-Succinct` is strictly an **experimental research tier** for extreme memory-constrained devices (16MB routers). For all production services and edge reverse proxies, **`V4/V5-Compact (SoA or AoS)`** is the recommended default.
 >
-> **Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$)**: Lower is better. While `V5-Succinct` reaches the absolute mathematical Shannon limit of in-memory compression (17.8 MB), `V4-Compact` achieves the global architectural maximum: 8-byte intervals fit 8 records per 64-byte L1 CPU cache line, driving query latency down to **60.9 ns** and delivering **50.3x higher efficiency than MaxMind MMDB**.
+> **Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$)**: Lower is better. While `V5-Succinct` reaches the absolute mathematical Shannon limit of in-memory compression (17.8 MB), `V4/V5-Compact (SoA)` achieves the global architectural maximum: columnar `soa_ip_from` slices pack 16 addresses into a single 64-byte L1 CPU cache line, driving query latency down to **15.4 ns** and delivering **198.8x higher efficiency than MaxMind MMDB**.
 >
-> **Automated Protection**: If the number of unique normalized profiles exceeds `65,535` (`u16::MAX`), the compiler automatically falls back from `V4-Compact` to `V4-Standard` without data truncation.
+> **Automated Protection**: If the number of unique normalized profiles exceeds `65,535` (`u16::MAX`), the compiler automatically falls back from `Compact` to `Standard` without data truncation.
 
 ---
 
@@ -206,11 +208,11 @@ ipatlas compile --preset country --geo DB5.CSV -o ipatlas_country.bin
 # - city: Country + Region + City + Coordinates without threats (~38 MB binary)
 ipatlas compile --preset city --geo DB5.CSV -o ipatlas_city.bin
 
-# V5 Compact Layout (8B V4 records / 36B V6 records, maximum L1/L2 cache locality):
-ipatlas compile --preset firewall --layout compact --geo DB5.CSV --proxy PX10.CSV -o firewall_compact.bin
+# Structure of Arrays (SoA) Layout (Peak 15.4 ns lookup speed):
+ipatlas compile --preset firewall --layout soa --family compact --geo DB5.CSV --proxy PX10.CSV -o firewall_soa.bin
 
 # Embedded Zstandard Container (Transparent In-Memory Decompression):
-# Compresses the payload inside the .bin file while keeping native 60.9 ns L1 query speed:
+# Compresses the payload inside the .bin file while keeping native L1 query speed:
 ipatlas compile --preset city --geo DB5.CSV --embedded-zstd -o ipatlas_city_zstd.bin
 ```
 
@@ -261,7 +263,7 @@ Add IPAtlas to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ipatlas = { version = "0.7.0", default-features = false }
+ipatlas = { version = "0.8.0", default-features = false }
 ```
 
 ### Basic Zero-Allocation Lookup
@@ -272,7 +274,17 @@ use ipatlas::IpAtlasReader;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reader = IpAtlasReader::open("ipatlas_full.bin")?;
 
-    // Zero-allocation borrowed lookup (60.9 ns on 5.3M production database)
+    // Warm up OS page cache for low cold-start latency:
+    reader.warmup();
+
+    // 1. Ultra-fast Flags-Only Fast Path (18.5 ns, zero-allocation, firewall/edge mode)
+    let ip_u32 = 0x08080808; // 8.8.8.8
+    if let Some(flags) = reader.lookup_flags_u32(ip_u32) {
+        println!("Is Threat: {}", flags.is_threat());
+        println!("Is Datacenter: {}", flags.is_datacenter());
+    }
+
+    // 2. Zero-allocation borrowed lookup (15.4 ns on SoA, 60.9 ns on AoS)
     if let Some(record) = reader.lookup_ref("1.1.1.1".parse()?) {
         println!("Country: {}", record.country);
         println!("City:    {}", record.city);

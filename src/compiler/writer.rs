@@ -8,9 +8,10 @@ use zerocopy::IntoBytes;
 
 use crate::compiler::sweep::{MergedEntry, MergedEntryV6};
 use crate::models::{
-    Crc32, HeaderV5, OptimizationConfig, ProfileV4, RangeV4, RangeV4Compact, RangeV6,
-    HEADER_FLAG_EMBEDDED_ZSTD, HEADER_SIZE_V5, MAGIC, PROFILE_SIZE_V4, RECORD_SIZE_V4_COMPACT,
-    RECORD_SIZE_V4_STANDARD, RECORD_SIZE_V6, VERSION_V5_COMPACT, VERSION_V5_STANDARD,
+    Crc32, HeaderV5, OptimizationConfig, ProfileV4, RangeV4, RangeV4Compact, RangeV6, RecordFamily,
+    StorageLayout, HEADER_FLAG_EMBEDDED_ZSTD, HEADER_SIZE_V5, MAGIC, PROFILE_SIZE_V4,
+    RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD, RECORD_SIZE_V6, VERSION_V5_COMPACT_AOS,
+    VERSION_V5_COMPACT_SOA, VERSION_V5_STANDARD_AOS, VERSION_V5_STANDARD_SOA,
 };
 
 #[derive(Default)]
@@ -82,6 +83,7 @@ pub struct CompilationStats {
     pub raw_size: u64,
     pub elapsed_secs: f64,
     pub is_compact: bool,
+    pub is_soa: bool,
     pub crc32: u32,
     pub warnings: Vec<String>,
     pub bin_path: PathBuf,
@@ -107,7 +109,8 @@ pub struct DatabaseWriter {
 
 impl DatabaseWriter {
     pub fn new(opt: OptimizationConfig) -> Self {
-        let storage = if opt.compact_ranges {
+        let is_compact = opt.compact_ranges || opt.family == RecordFamily::Compact;
+        let storage = if is_compact {
             RangeStorage::Compact(Vec::new())
         } else {
             RangeStorage::Standard(Vec::new())
@@ -232,6 +235,7 @@ impl DatabaseWriter {
         }
 
         let is_compact = matches!(self.storage, RangeStorage::Compact(_));
+        let is_soa = self.opt.layout == StorageLayout::Soa;
         let total_records_v4 = match &self.storage {
             RangeStorage::Standard(vec) => vec.len() as u32,
             RangeStorage::Compact(vec) => vec.len() as u32,
@@ -246,10 +250,11 @@ impl DatabaseWriter {
         };
         let record_size_v6 = RECORD_SIZE_V6;
 
-        let version = if is_compact {
-            VERSION_V5_COMPACT
-        } else {
-            VERSION_V5_STANDARD
+        let version = match (is_compact, is_soa) {
+            (true, true) => VERSION_V5_COMPACT_SOA,
+            (true, false) => VERSION_V5_COMPACT_AOS,
+            (false, true) => VERSION_V5_STANDARD_SOA,
+            (false, false) => VERSION_V5_STANDARD_AOS,
         };
 
         let records_v4_bytes = (total_records_v4 as usize) * (record_size_v4 as usize);
@@ -319,15 +324,42 @@ impl DatabaseWriter {
                 // Buffer uncompressed payload in memory, compute its CRC32, and compress via zstd-19
                 let mut payload =
                     Vec::with_capacity(records_v4_bytes + records_v6_bytes + prof_size);
-                match &self.storage {
-                    RangeStorage::Standard(vec) => {
-                        for r in vec {
-                            payload.extend_from_slice(r.as_bytes());
+                if is_soa {
+                    match &self.storage {
+                        RangeStorage::Compact(vec) => {
+                            for r in vec {
+                                payload.extend_from_slice(&r.ip_from.to_le_bytes());
+                            }
+                            for r in vec {
+                                payload.extend_from_slice(&r.count.to_le_bytes());
+                            }
+                            for r in vec {
+                                payload.extend_from_slice(&r.profile_id.to_le_bytes());
+                            }
+                        }
+                        RangeStorage::Standard(vec) => {
+                            for r in vec {
+                                payload.extend_from_slice(&r.ip_from.to_le_bytes());
+                            }
+                            for r in vec {
+                                payload.extend_from_slice(&r.ip_to.to_le_bytes());
+                            }
+                            for r in vec {
+                                payload.extend_from_slice(&r.profile_id.to_le_bytes());
+                            }
                         }
                     }
-                    RangeStorage::Compact(vec) => {
-                        for r in vec {
-                            payload.extend_from_slice(r.as_bytes());
+                } else {
+                    match &self.storage {
+                        RangeStorage::Standard(vec) => {
+                            for r in vec {
+                                payload.extend_from_slice(r.as_bytes());
+                            }
+                        }
+                        RangeStorage::Compact(vec) => {
+                            for r in vec {
+                                payload.extend_from_slice(r.as_bytes());
+                            }
                         }
                     }
                 }
@@ -372,19 +404,58 @@ impl DatabaseWriter {
                 let mut crc = Crc32::new();
 
                 // Write and CRC IPv4 ranges
-                match &self.storage {
-                    RangeStorage::Standard(vec) => {
-                        for r in vec {
-                            let bytes = r.as_bytes();
-                            crc.update(bytes);
-                            writer.write_all(bytes)?;
+                if is_soa {
+                    match &self.storage {
+                        RangeStorage::Compact(vec) => {
+                            for r in vec {
+                                let bytes = r.ip_from.to_le_bytes();
+                                crc.update(&bytes);
+                                writer.write_all(&bytes)?;
+                            }
+                            for r in vec {
+                                let bytes = r.count.to_le_bytes();
+                                crc.update(&bytes);
+                                writer.write_all(&bytes)?;
+                            }
+                            for r in vec {
+                                let bytes = r.profile_id.to_le_bytes();
+                                crc.update(&bytes);
+                                writer.write_all(&bytes)?;
+                            }
+                        }
+                        RangeStorage::Standard(vec) => {
+                            for r in vec {
+                                let bytes = r.ip_from.to_le_bytes();
+                                crc.update(&bytes);
+                                writer.write_all(&bytes)?;
+                            }
+                            for r in vec {
+                                let bytes = r.ip_to.to_le_bytes();
+                                crc.update(&bytes);
+                                writer.write_all(&bytes)?;
+                            }
+                            for r in vec {
+                                let bytes = r.profile_id.to_le_bytes();
+                                crc.update(&bytes);
+                                writer.write_all(&bytes)?;
+                            }
                         }
                     }
-                    RangeStorage::Compact(vec) => {
-                        for r in vec {
-                            let bytes = r.as_bytes();
-                            crc.update(bytes);
-                            writer.write_all(bytes)?;
+                } else {
+                    match &self.storage {
+                        RangeStorage::Standard(vec) => {
+                            for r in vec {
+                                let bytes = r.as_bytes();
+                                crc.update(bytes);
+                                writer.write_all(bytes)?;
+                            }
+                        }
+                        RangeStorage::Compact(vec) => {
+                            for r in vec {
+                                let bytes = r.as_bytes();
+                                crc.update(bytes);
+                                writer.write_all(bytes)?;
+                            }
                         }
                     }
                 }
@@ -461,6 +532,7 @@ impl DatabaseWriter {
             raw_size,
             elapsed_secs: elapsed,
             is_compact,
+            is_soa,
             crc32: calculated_crc32,
             warnings: self.warnings.clone(),
             bin_path: path.to_path_buf(),
