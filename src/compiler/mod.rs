@@ -64,6 +64,11 @@ impl<'a> CompilerOptions<'a> {
         self
     }
 
+    pub fn embedded_zstd(mut self, enabled: bool) -> Self {
+        self.opt.embedded_zstd = enabled;
+        self
+    }
+
     pub fn geo(mut self, path: Option<&'a Path>) -> Self {
         self.geo_path = path;
         self

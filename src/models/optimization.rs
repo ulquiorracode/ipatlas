@@ -15,6 +15,8 @@ pub enum OptRule {
     CollapseThreats,
     /// Format V4.1 Compact: 8-byte range intervals (ip_from: u32, count: u16, profile_id: u16).
     CompactRanges,
+    /// Compress payload via embedded Zstandard frame (zstd-19) for minimal disk footprint.
+    EmbeddedZstd,
 }
 
 /// Optimization configuration representing chosen compiler transformation flags.
@@ -27,6 +29,7 @@ pub struct OptimizationConfig {
     pub prune_empty: bool,
     pub collapse_threats: bool,
     pub compact_ranges: bool,
+    pub embedded_zstd: bool,
 }
 
 impl Default for OptimizationConfig {
@@ -47,6 +50,7 @@ impl OptimizationConfig {
             prune_empty: true,
             collapse_threats: false,
             compact_ranges: false,
+            embedded_zstd: false,
         }
     }
 
@@ -60,6 +64,7 @@ impl OptimizationConfig {
             prune_empty: true,
             collapse_threats: false,
             compact_ranges: false,
+            embedded_zstd: false,
         }
     }
 
@@ -73,6 +78,7 @@ impl OptimizationConfig {
             prune_empty: true,
             collapse_threats: false,
             compact_ranges: false,
+            embedded_zstd: false,
         }
     }
 
@@ -86,6 +92,7 @@ impl OptimizationConfig {
             prune_empty: true,
             collapse_threats: false,
             compact_ranges: false,
+            embedded_zstd: false,
         }
     }
 
@@ -129,7 +136,8 @@ impl OptimizationConfig {
                 "prune-empty" => self.prune_empty = true,
                 "collapse-threats" => self.collapse_threats = true,
                 "compact" | "compact-ranges" | "v4.1" | "v4-compact" => self.compact_ranges = true,
-                other => return Err(format!("Unknown optimization rule or level: '{}'. Available: 0, 1, 2, 3, coalesce, normalize-strings, lossy-coords, prune-empty, collapse-threats, compact-ranges", other)),
+                "zstd" | "embedded-zstd" => self.embedded_zstd = true,
+                other => return Err(format!("Unknown optimization rule or level: '{}'. Available: 0, 1, 2, 3, coalesce, normalize-strings, lossy-coords, prune-empty, collapse-threats, compact-ranges, embedded-zstd", other)),
             }
         }
         Ok(())

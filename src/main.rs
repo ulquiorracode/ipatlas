@@ -73,6 +73,10 @@ struct CompileArgs {
     /// Output binary path (.bin)
     #[arg(short = 'o', long = "out")]
     out: PathBuf,
+
+    /// Compress payload via embedded Zstandard frame (zstd-19) for ultra-compact disk storage
+    #[arg(long = "embedded-zstd", alias = "zstd")]
+    embedded_zstd: bool,
 }
 
 #[derive(Args)]
@@ -159,6 +163,10 @@ fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
     let mut opt_config = OptimizationConfig::default();
     if args.layout.to_lowercase() == "compact" || args.layout.to_lowercase() == "v4.1" {
         opt_config.compact_ranges = true;
+    }
+
+    if args.embedded_zstd {
+        opt_config.embedded_zstd = true;
     }
 
     for opt_arg in &args.optimization {
@@ -392,6 +400,14 @@ fn run_info(args: InfoArgs) -> anyhow::Result<()> {
     println!("Indexed Cities: {}", format_num(reader.city_count()));
     println!("Indexed Regions:{}", format_num(reader.region_count()));
     println!("Indexed ISPs:   {}", format_num(reader.isp_count()));
+    println!(
+        "Compression:    {}",
+        if reader.is_embedded_zstd() {
+            "Embedded Zstandard (zstd-19 frame, decompressed into RAM)"
+        } else {
+            "None (Raw Zero-Copy Memory-Mapped)"
+        }
+    );
     println!("File Size:      {:.2} MB", size_mb);
 
     if let Some(stored_crc) = reader.crc32() {

@@ -135,10 +135,19 @@ pub struct HeaderV5 {
     pub crc32: u32,
 }
 
+/// Header flags bitmask stored in `HeaderV5::reserved`.
+pub const HEADER_FLAG_EMBEDDED_ZSTD: u16 = 1 << 2;
+
 impl HeaderV5 {
     #[inline(always)]
     pub fn is_compact_v4(&self) -> bool {
         self.version == VERSION_V5_COMPACT && self.record_size_v4 == RECORD_SIZE_V4_COMPACT
+    }
+
+    /// Returns true if the payload following the header is compressed via embedded Zstandard.
+    #[inline(always)]
+    pub fn is_embedded_zstd(&self) -> bool {
+        (self.reserved & HEADER_FLAG_EMBEDDED_ZSTD) != 0
     }
 
     /// Validates magic, version, section offsets and file size.

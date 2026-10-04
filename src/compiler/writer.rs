@@ -9,8 +9,8 @@ use zerocopy::IntoBytes;
 use crate::compiler::sweep::{MergedEntry, MergedEntryV6};
 use crate::models::{
     Crc32, HeaderV5, OptimizationConfig, ProfileV4, RangeV4, RangeV4Compact, RangeV6,
-    HEADER_SIZE_V5, MAGIC, PROFILE_SIZE_V4, RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD,
-    RECORD_SIZE_V6, VERSION_V5_COMPACT, VERSION_V5_STANDARD,
+    HEADER_FLAG_EMBEDDED_ZSTD, HEADER_SIZE_V5, MAGIC, PROFILE_SIZE_V4, RECORD_SIZE_V4_COMPACT,
+    RECORD_SIZE_V4_STANDARD, RECORD_SIZE_V6, VERSION_V5_COMPACT, VERSION_V5_STANDARD,
 };
 
 #[derive(Default)]
@@ -272,7 +272,7 @@ impl DatabaseWriter {
         let i_data_off = i_idx_off + i_idx_len;
         let i_data_len = self.isps.blob.len() as u32;
 
-        let header = HeaderV5 {
+        let mut header = HeaderV5 {
             magic: MAGIC,
             version,
             total_records_v4,
@@ -293,7 +293,11 @@ impl DatabaseWriter {
             isp_idx_off: i_idx_off,
             isp_data_off: i_data_off,
             isp_data_len: i_data_len,
-            reserved: 0,
+            reserved: if self.opt.embedded_zstd {
+                HEADER_FLAG_EMBEDDED_ZSTD
+            } else {
+                0
+            },
             crc32: 0,
         };
 
@@ -310,80 +314,131 @@ impl DatabaseWriter {
         {
             let guard = TempFileGuard(&tmp_bin_path);
             let file = File::create(&tmp_bin_path)?;
-            let mut writer = BufWriter::with_capacity(1024 * 1024, file);
 
-            // Write initial header placeholder
-            writer.write_all(header.as_bytes())?;
-
-            let mut crc = Crc32::new();
-
-            // Write and CRC IPv4 ranges
-            match &self.storage {
-                RangeStorage::Standard(vec) => {
-                    for r in vec {
-                        let bytes = r.as_bytes();
-                        crc.update(bytes);
-                        writer.write_all(bytes)?;
+            if self.opt.embedded_zstd {
+                // Buffer uncompressed payload in memory, compute its CRC32, and compress via zstd-19
+                let mut payload =
+                    Vec::with_capacity(records_v4_bytes + records_v6_bytes + prof_size);
+                match &self.storage {
+                    RangeStorage::Standard(vec) => {
+                        for r in vec {
+                            payload.extend_from_slice(r.as_bytes());
+                        }
+                    }
+                    RangeStorage::Compact(vec) => {
+                        for r in vec {
+                            payload.extend_from_slice(r.as_bytes());
+                        }
                     }
                 }
-                RangeStorage::Compact(vec) => {
-                    for r in vec {
-                        let bytes = r.as_bytes();
-                        crc.update(bytes);
-                        writer.write_all(bytes)?;
+                for r in &self.ranges_v6 {
+                    payload.extend_from_slice(r.as_bytes());
+                }
+                for p in &self.profiles {
+                    payload.extend_from_slice(p.as_bytes());
+                }
+                for off in &self.cities.offsets {
+                    payload.extend_from_slice(&off.to_le_bytes());
+                }
+                payload.extend_from_slice(&self.cities.blob);
+                for off in &self.regions.offsets {
+                    payload.extend_from_slice(&off.to_le_bytes());
+                }
+                payload.extend_from_slice(&self.regions.blob);
+                for off in &self.isps.offsets {
+                    payload.extend_from_slice(&off.to_le_bytes());
+                }
+                payload.extend_from_slice(&self.isps.blob);
+
+                let mut crc = Crc32::new();
+                crc.update(&payload);
+                calculated_crc32 = crc.finalize();
+                header.crc32 = calculated_crc32;
+
+                let compressed_payload = zstd::stream::encode_all(&payload[..], 19)?;
+
+                let mut writer = BufWriter::with_capacity(1024 * 1024, file);
+                writer.write_all(header.as_bytes())?;
+                writer.write_all(&compressed_payload)?;
+                writer.flush()?;
+                let inner_file = writer.get_mut();
+                inner_file.sync_all()?;
+            } else {
+                let mut writer = BufWriter::with_capacity(1024 * 1024, file);
+
+                // Write initial header placeholder
+                writer.write_all(header.as_bytes())?;
+
+                let mut crc = Crc32::new();
+
+                // Write and CRC IPv4 ranges
+                match &self.storage {
+                    RangeStorage::Standard(vec) => {
+                        for r in vec {
+                            let bytes = r.as_bytes();
+                            crc.update(bytes);
+                            writer.write_all(bytes)?;
+                        }
+                    }
+                    RangeStorage::Compact(vec) => {
+                        for r in vec {
+                            let bytes = r.as_bytes();
+                            crc.update(bytes);
+                            writer.write_all(bytes)?;
+                        }
                     }
                 }
+
+                // Write and CRC IPv6 ranges
+                for r in &self.ranges_v6 {
+                    let bytes = r.as_bytes();
+                    crc.update(bytes);
+                    writer.write_all(bytes)?;
+                }
+
+                // Write and CRC profiles
+                for p in &self.profiles {
+                    let bytes = p.as_bytes();
+                    crc.update(bytes);
+                    writer.write_all(bytes)?;
+                }
+
+                // Write and CRC city table
+                for off in &self.cities.offsets {
+                    let bytes = off.to_le_bytes();
+                    crc.update(&bytes);
+                    writer.write_all(&bytes)?;
+                }
+                crc.update(&self.cities.blob);
+                writer.write_all(&self.cities.blob)?;
+
+                // Write and CRC region table
+                for off in &self.regions.offsets {
+                    let bytes = off.to_le_bytes();
+                    crc.update(&bytes);
+                    writer.write_all(&bytes)?;
+                }
+                crc.update(&self.regions.blob);
+                writer.write_all(&self.regions.blob)?;
+
+                // Write and CRC ISP table
+                for off in &self.isps.offsets {
+                    let bytes = off.to_le_bytes();
+                    crc.update(&bytes);
+                    writer.write_all(&bytes)?;
+                }
+                crc.update(&self.isps.blob);
+                writer.write_all(&self.isps.blob)?;
+
+                calculated_crc32 = crc.finalize();
+
+                // Seek back to write calculated CRC32 in header (offset 76)
+                writer.flush()?;
+                let inner_file = writer.get_mut();
+                inner_file.seek(SeekFrom::Start(76))?;
+                inner_file.write_all(&calculated_crc32.to_le_bytes())?;
+                inner_file.sync_all()?;
             }
-
-            // Write and CRC IPv6 ranges
-            for r in &self.ranges_v6 {
-                let bytes = r.as_bytes();
-                crc.update(bytes);
-                writer.write_all(bytes)?;
-            }
-
-            // Write and CRC profiles
-            for p in &self.profiles {
-                let bytes = p.as_bytes();
-                crc.update(bytes);
-                writer.write_all(bytes)?;
-            }
-
-            // Write and CRC city table
-            for off in &self.cities.offsets {
-                let bytes = off.to_le_bytes();
-                crc.update(&bytes);
-                writer.write_all(&bytes)?;
-            }
-            crc.update(&self.cities.blob);
-            writer.write_all(&self.cities.blob)?;
-
-            // Write and CRC region table
-            for off in &self.regions.offsets {
-                let bytes = off.to_le_bytes();
-                crc.update(&bytes);
-                writer.write_all(&bytes)?;
-            }
-            crc.update(&self.regions.blob);
-            writer.write_all(&self.regions.blob)?;
-
-            // Write and CRC ISP table
-            for off in &self.isps.offsets {
-                let bytes = off.to_le_bytes();
-                crc.update(&bytes);
-                writer.write_all(&bytes)?;
-            }
-            crc.update(&self.isps.blob);
-            writer.write_all(&self.isps.blob)?;
-
-            calculated_crc32 = crc.finalize();
-
-            // Seek back to write calculated CRC32 in header (offset 76)
-            writer.flush()?;
-            let inner_file = writer.get_mut();
-            inner_file.seek(SeekFrom::Start(76))?;
-            inner_file.write_all(&calculated_crc32.to_le_bytes())?;
-            inner_file.sync_all()?;
 
             std::mem::forget(guard);
         }

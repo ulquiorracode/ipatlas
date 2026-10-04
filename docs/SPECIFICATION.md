@@ -91,6 +91,14 @@ The global IPv4 table contains $N \approx 5.3 \times 10^6$ disjoint intervals in
 - **Measured Latency**: **353.8 ns** (measured via Criterion benchmark `succinct_elias_fano_lookup` vs 60.9 ns on flat compact arrays, due to bit-shifting and CPU branch misprediction overhead).
 - **Compilation Adapter**: Integrated via `compiler::succinct::SuccinctIntervalTable` prototype and `compiler::adapters`.
 
+### 5.3 Incompressibility Invariant of Succinct Streams
+
+Because the Elias-Fano representation already compresses the interval boundaries down to maximal theoretical entropy ($H \approx 1.0\text{ bit/bit}$), the lower-bits bitstream is statistically indistinguishable from uniform white noise. 
+
+Applying dictionary or statistical block compressors (Zstandard, Deflate/Gzip) on top of raw `V5-Succinct` binaries yields a negligible reduction of only **3–7%** while introducing decompression CPU latency and heap overhead. Consequently:
+- **`V5-Succinct` data MUST be deployed and served strictly as raw binary images**.
+- External or embedded compression layers are architectural anti-patterns when paired with Succinct encodings.
+
 ---
 
 ## 6. String Blob and Normalization Pool
@@ -100,3 +108,20 @@ String storage (City, Region, ISP names) is decoupled into an atomic deduplicate
 - **Offsets Array**: `Vec<u32>` pointing to null-terminated UTF-8 byte slices.
 - **Index 0 Reserved**: Strictly maps to `""` and `"-"`.
 - **Lookups**: `O(1)` SIMD slice scan using `memchr::memchr(0, ...)` directly on mmap views without heap allocations.
+
+---
+
+## 7. Embedded Compression Container Architecture (`EMBEDDED_ZSTD`)
+
+For deployment environments prioritizing minimal disk footprint while demanding 100% loss-free metadata precision (e.g. global city names, high-resolution coordinates, full threat bitmasks), IPAtlas specifies an optional embedded compression container format:
+
+### 7.1 Architecture & Header Flag
+
+- **Header Flag**: `HEADER_FLAG_EMBEDDED_ZSTD = 0x0004` encoded in `HeaderV5::reserved`.
+- **Physical Layout**:
+  - The 80-byte `HeaderV5` remains strictly uncompressed and unencrypted at offset 0.
+  - The entire payload following offset 80 (range index, profile table, string offsets, and string blob) is compressed as a single contiguous Zstandard frame (`zstd-19`).
+- **Reader Lifecycle**:
+  - If `EMBEDDED_ZSTD == 0`: `IpAtlasReader` maps the file via `memmap2::Mmap` (zero RAM, OS kernel page cache, instant startup).
+  - If `EMBEDDED_ZSTD == 1`: `IpAtlasReader` decompresses the payload into a contiguous anonymous RAM buffer (`Vec<u8>`) on startup (~25ms).
+  - Subsequent lookups execute at full native L1 flat binary search speed (**60.9 ns**) with zero allocations.

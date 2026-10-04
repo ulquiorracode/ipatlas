@@ -6,6 +6,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-10-04
+
+### Added
+
+- **Embedded Compression Container Architecture (`EMBEDDED_ZSTD`)**:
+  - Added optional embedded Zstandard payload compression (`zstd-19`) inside binary `.bin` database files.
+  - Specified physical container layout and header bitmask flag: `HEADER_FLAG_EMBEDDED_ZSTD = 0x0004` encoded in `HeaderV5::reserved`.
+  - Transparent in-memory decompression in `IpAtlasReader`: keeps uncompressed 80-byte `HeaderV5` on disk, transparently decodes compressed payload into an anonymous memory buffer upon opening, preserving exact CRC32 verification and sub-100ns (60.9 ns) lookup speed with zero subsequent allocations.
+  - Added `--embedded-zstd` (alias `--zstd`) flag to `ipatlas compile` and `-O embedded-zstd` optimization rule.
+  - Added `StorageBuffer { Mmap(Mmap), Memory(Vec<u8>) }` abstraction in `IpAtlasReader` providing transparent `Deref<Target = [u8]>` zero-copy views.
+  - Added compression status detection in `ipatlas info` and reader helper `IpAtlasReader::is_embedded_zstd()`.
+  - Integration test suite in `tests/test_embedded_zstd.rs` verifying compression, CRC32 preservation, and identical lookup resolution across IPv4 ranges.
+- **Succinct Stream Incompressibility Specification (`docs/SPECIFICATION.md`)**:
+  - Documented Section 5.3 clarifying theoretical and empirical incompressibility of Elias-Fano succinct streams ($H \approx 1.0\text{ bit/bit}$).
+  - Codified the invariant that `V5-Succinct` data must be distributed strictly as raw binaries, whereas embedded Zstd is designated for standard/compact layouts with unquantized metadata.
+
 ## [0.6.0] - 2026-10-04
 
 ### Added

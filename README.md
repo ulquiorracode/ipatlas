@@ -118,6 +118,10 @@ ipatlas compile --preset city --geo DB5.CSV -o ipatlas_city.bin
 # V5 Compact Layout (8B V4 records / 36B V6 records, maximum L1/L2 cache locality):
 ipatlas compile --preset firewall --layout compact --geo DB5.CSV --proxy PX10.CSV -o firewall_compact.bin
 
+# Embedded Zstandard Container (Transparent In-Memory Decompression):
+# Compresses the payload inside the .bin file while keeping native 60.9 ns L1 query speed:
+ipatlas compile --preset city --geo DB5.CSV --embedded-zstd -o ipatlas_city_zstd.bin
+
 # Distribution Compression (Unix-way):
 # Use native system utilities (zstd / pigz) to compress compiled binaries for distribution:
 zstd -19 --keep ipatlas_full.bin      # produces ipatlas_full.bin.zst

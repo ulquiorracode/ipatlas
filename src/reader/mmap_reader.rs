@@ -24,6 +24,8 @@ pub enum ReaderError {
     CrcMismatch { expected: u32, actual: u32 },
     #[error("Unsupported database version: {0:#06x}")]
     UnsupportedVersion(u16),
+    #[error("Decompression error: {0}")]
+    Decompression(String),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -32,15 +34,35 @@ pub enum HeaderVariant {
     V5(HeaderV5),
 }
 
+/// Backing storage for zero-copy views: either a zero-copy memory mapping or an in-memory buffer.
+pub enum StorageBuffer {
+    Mmap(Mmap),
+    Memory(Vec<u8>),
+}
+
+impl std::ops::Deref for StorageBuffer {
+    type Target = [u8];
+
+    #[inline(always)]
+    fn deref(&self) -> &[u8] {
+        match self {
+            Self::Mmap(m) => m,
+            Self::Memory(v) => v,
+        }
+    }
+}
+
 /// Zero-copy memory-mapped IPAtlas database reader supporting Generation V4 and V5 (Dual-Stack).
-/// Completely sound and safe: holds the mmap allocation and computes verified zerocopy slices on the fly.
+/// Completely sound and safe: holds the storage allocation and computes verified zerocopy slices on the fly.
 pub struct IpAtlasReader {
-    mmap: Mmap,
+    mmap: StorageBuffer,
     header: HeaderVariant,
 }
 
 impl IpAtlasReader {
     /// Opens and memory-maps an IPAtlas database from disk.
+    /// If the database has `EMBEDDED_ZSTD` set in its header flags, its payload
+    /// is transparently decompressed into memory upon opening.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, ReaderError> {
         let file = File::open(path)?;
         let file_len = file.metadata()?.len();
@@ -66,26 +88,45 @@ impl IpAtlasReader {
 
         let version = u16::from_le_bytes([mmap[4], mmap[5]]);
 
-        let header = match version {
+        let (header, storage) = match version {
             VERSION_V5_STANDARD | VERSION_V5_COMPACT => {
                 if file_len < HEADER_SIZE_V5 as u64 {
                     return Err(ReaderError::FileTooSmall(file_len));
                 }
                 let h = HeaderV5::read_from_bytes(&mmap[..HEADER_SIZE_V5])
                     .map_err(|_| ReaderError::Corrupted("Failed to parse V5 header bytes"))?;
-                h.validate(file_len).map_err(ReaderError::Corrupted)?;
-                HeaderVariant::V5(h)
+
+                if h.is_embedded_zstd() {
+                    let decompressed_payload = zstd::stream::decode_all(&mmap[HEADER_SIZE_V5..])
+                        .map_err(|e| ReaderError::Decompression(e.to_string()))?;
+                    let total_uncompressed_len =
+                        (HEADER_SIZE_V5 + decompressed_payload.len()) as u64;
+                    h.validate(total_uncompressed_len)
+                        .map_err(ReaderError::Corrupted)?;
+
+                    let mut full_buf =
+                        Vec::with_capacity(HEADER_SIZE_V5 + decompressed_payload.len());
+                    full_buf.extend_from_slice(&mmap[..HEADER_SIZE_V5]);
+                    full_buf.extend_from_slice(&decompressed_payload);
+                    (HeaderVariant::V5(h), StorageBuffer::Memory(full_buf))
+                } else {
+                    h.validate(file_len).map_err(ReaderError::Corrupted)?;
+                    (HeaderVariant::V5(h), StorageBuffer::Mmap(mmap))
+                }
             }
             VERSION_V4_STANDARD | VERSION_V4_COMPACT => {
                 let h = HeaderV4::read_from_bytes(&mmap[..HEADER_SIZE_V4])
                     .map_err(|_| ReaderError::Corrupted("Failed to parse V4 header bytes"))?;
                 h.validate(file_len).map_err(ReaderError::Corrupted)?;
-                HeaderVariant::V4(h)
+                (HeaderVariant::V4(h), StorageBuffer::Mmap(mmap))
             }
             other => return Err(ReaderError::UnsupportedVersion(other)),
         };
 
-        let reader = Self { mmap, header };
+        let reader = Self {
+            mmap: storage,
+            header,
+        };
 
         // Pre-validate slices
         match &reader.header {
@@ -210,6 +251,15 @@ impl IpAtlasReader {
         match &self.header {
             HeaderVariant::V4(h) => h.is_compact(),
             HeaderVariant::V5(h) => h.is_compact_v4(),
+        }
+    }
+
+    /// Returns true if the database was packaged with embedded Zstandard compression.
+    #[inline(always)]
+    pub fn is_embedded_zstd(&self) -> bool {
+        match &self.header {
+            HeaderVariant::V4(_) => false,
+            HeaderVariant::V5(h) => h.is_embedded_zstd(),
         }
     }
 
