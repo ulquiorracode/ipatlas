@@ -179,6 +179,7 @@ ipatlas = { version = "0.4.1", default-features = false }
 
 ### Example Usage
 
+#### Direct Zero-Copy Reader
 ```rust
 use ipatlas::IpAtlasReader;
 
@@ -194,6 +195,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Is Botnet:      {}", record.flags.is_botnet());
     }
 
+    Ok(())
+}
+```
+
+#### Monomorphic U-Cycle Pipeline (`stitch-rs`)
+IPAtlas integrates the monomorphic U-cycle execution pipeline via `stitch-rs`:
+
+```rust
+use ipatlas::pipeline::{IpAtlasPipelineExt, LookupContext, LookupIntent};
+use ipatlas::IpAtlasReader;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let reader = IpAtlasReader::open("ipatlas_full.bin")?;
+    let mut ctx = LookupContext::default();
+
+    // 1. Bogon short-circuit: 127.0.0.1 terminates on descent in ~1.5 ns without mmap/disk lookup
+    let bogon_res = reader.query_pipeline(&mut ctx, LookupIntent::new("127.0.0.1".parse()?))?;
+    assert!(bogon_res.is_bogon);
+
+    // 2. Strict threat filtering: policy layer enforces rejection of proxy/tor/vpn/botnets on ascent
+    let intent = LookupIntent::new("1.0.5.10".parse()?).with_strict_threat_filter(true);
+    match reader.query_pipeline(&mut ctx, intent) {
+        Ok(outcome) => println!("Resolved: {:?}", outcome.country()),
+        Err(err) => println!("Rejected by security policy: {err}"),
+    }
+
+    println!("Total lookups: {}, Bogon short-circuits: {}", ctx.dispatches, ctx.bogon_short_circuits);
     Ok(())
 }
 ```

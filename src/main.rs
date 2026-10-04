@@ -3,8 +3,9 @@ use std::time::Instant;
 
 use clap::{Args, Parser, Subcommand};
 use ipatlas::{
-    compile, CompilerOptions, FeatureMask, IpAtlasReader, OptimizationConfig, Preset,
-    RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD, RECORD_SIZE_V6,
+    compile, CompilerOptions, FeatureMask, IpAtlasPipelineExt, IpAtlasReader, LookupContext,
+    LookupIntent, OptimizationConfig, Preset, RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD,
+    RECORD_SIZE_V6,
 };
 
 #[derive(Parser)]
@@ -242,12 +243,26 @@ fn run_lookup(args: LookupArgs) -> anyhow::Result<()> {
     }
 
     let reader = IpAtlasReader::open(&args.database)?;
+    let ip: std::net::IpAddr = args
+        .ip
+        .parse()
+        .map_err(|e| anyhow::anyhow!("Invalid IP address {:?}: {}", args.ip, e))?;
+
+    let mut ctx = LookupContext::new();
     let t0 = Instant::now();
-    let res = reader.lookup_str(&args.ip);
+    let outcome = reader.query_pipeline(&mut ctx, LookupIntent::new(ip))?;
     let dt = t0.elapsed();
     let dt_us = dt.as_secs_f64() * 1_000_000.0;
 
-    if let Some(rec) = res {
+    if outcome.is_bogon {
+        println!("IP:            {}", ip);
+        println!("Status:        [BOGON / PRIVATE / RESERVED NETWORK]");
+        println!("Short-Circuit: Monomorphic U-Cycle bypassed binary search (0 disk/mmap reads)");
+        println!("Lookup Time:   {:.2} µs ({} ns)", dt_us, dt.as_nanos());
+        return Ok(());
+    }
+
+    if let Some(rec) = outcome.record {
         println!("IP:          {}", rec.ip);
         println!("Type:        {}", if rec.is_v6 { "IPv6" } else { "IPv4" });
         println!("Range:       {}", rec.range_str());
@@ -469,6 +484,29 @@ fn run_bench(args: BenchArgs) -> anyhow::Result<()> {
     );
     println!("Average Latency: {:.1} ns/query", avg_ns_par);
     println!("Speedup Factor:  {:.1}x", qps_par / qps);
+
+    // 3. stitch-rs Monomorphic U-Cycle Pipeline Benchmark
+    let mut pipe_ctx = LookupContext::new();
+    let mut pipe = reader.standard_pipeline();
+    let t_pipe = Instant::now();
+    for &ip_u32 in &test_ips {
+        let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::from(ip_u32));
+        let _ = pipe.dispatch(&mut pipe_ctx, LookupIntent::new(ip));
+    }
+    let total_secs_pipe = t_pipe.elapsed().as_secs_f64();
+    let qps_pipe = (args.count as f64) / total_secs_pipe;
+    let avg_ns_pipe = (t_pipe.elapsed().as_nanos() as f64) / (args.count as f64);
+
+    println!("\nstitch-rs Monomorphic U-Cycle Pipeline (Single-Threaded):");
+    println!(
+        "Throughput:      {} queries/sec",
+        format_num(qps_pipe as u64)
+    );
+    println!("Average Latency: {:.1} ns/query", avg_ns_pipe);
+    println!(
+        "Bogon Bypasses:  {}",
+        format_num(pipe_ctx.bogon_short_circuits)
+    );
 
     Ok(())
 }

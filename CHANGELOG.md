@@ -6,6 +6,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-10-04
+ 
+### Added
+ 
+- **Monomorphic U-Cycle Execution Pipeline (`stitch-rs`)**:
+  - Integrated `stitch-rs` as the core operational execution model for lookups.
+  - Implemented `BogonFilterLayer`: short-circuits private LAN (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), CGNAT (`100.64.0.0/10`), loopback (`127.0.0.0/8`, `::1`), link-local, multicast, and IPv6 ULA (`fc00::/7`) directly on the descent stage in ~1.5 ns without invoking binary search or disk mmap accesses.
+  - Implemented `ThreatPolicyLayer`: enforces threat intelligence rejection (proxies, VPNs, Tor exit nodes, botnets, spam networks) on the ascent stage.
+  - Implemented `TelemetryLayer`: measures high-resolution latency and aggregates execution metrics (`dispatches`, `bogon_short_circuits`, `threat_rejections`).
+  - Added `IpAtlasTerminal`: zero-copy resolution terminal mapping into borrowed mmap slices.
+  - Added `IpAtlasPipelineExt` trait extending `IpAtlasReader` with `standard_pipeline()` and `query_pipeline()`.
+  - Added `StandardLookupPipeline` concrete type alias eliminating trait object overhead.
+  - CLI enhancements: `ipatlas lookup` shows pipeline execution latency; `ipatlas bench` benchmarks U-cycle throughput and bogon short-circuits.
+  - Comprehensive integration test suite in `tests/test_pipeline.rs`.
+
 ## [0.4.0] - 2026-10-02
 
 ### Added
