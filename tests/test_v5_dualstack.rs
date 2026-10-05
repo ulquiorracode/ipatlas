@@ -224,9 +224,10 @@ fn test_v5_ipv6_split64_compact_compilation_and_lookup() {
 
     let out_compact_bin = dir.path().join("dualstack_compact_v5.bin");
 
-    // Compile with Compact family
+    // Compile with Compact family and explicit Split64 IPv6 opt-in
     let opt = ipatlas::OptimizationConfig {
         family: ipatlas::RecordFamily::Compact,
+        split64_v6: true,
         ..Default::default()
     };
 
@@ -272,4 +273,99 @@ fn test_v5_ipv6_split64_compact_compilation_and_lookup() {
         .expect("Profile lookup failed");
     assert_eq!(prof.country_code(), "DE");
     assert_eq!(prof.asn, 24940);
+}
+
+#[test]
+fn test_ipv6_sub_slash64_over_approximation_contract() {
+    let dir = tempdir().unwrap();
+
+    // Define a sub-/64 range: 2001:db8::10 to 2001:db8::20 (within 2001:db8::0/64)
+    let sub_from: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0010;
+    let sub_to: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0020;
+
+    let geo_v6 = dir.path().join("sub64_geo.csv");
+    let mut f = File::create(&geo_v6).unwrap();
+    writeln!(
+        f,
+        "\"{}\",\"{}\",\"FR\",\"France\",\"IDF\",\"Paris\",\"48.8566\",\"2.3522\",\"OVH\",\"16276\"",
+        sub_from, sub_to
+    )
+    .unwrap();
+    drop(f);
+
+    // 1. Standard (Lossless default) Mode:
+    // Even under Compact family (which compacts IPv4), IPv6 remains lossless Standard 36B by default!
+    let std_bin = dir.path().join("sub64_std.bin");
+    let opt_default = ipatlas::OptimizationConfig {
+        family: ipatlas::RecordFamily::Compact,
+        split64_v6: false, // default safe lossless mode
+        ..Default::default()
+    };
+    compile(
+        CompilerOptions::new(&std_bin)
+            .geo_v6(Some(&geo_v6))
+            .optimization(opt_default),
+    )
+    .expect("Standard compilation failed");
+
+    let reader_std = IpAtlasReader::open(&std_bin).unwrap();
+    assert_eq!(reader_std.ranges_v6().len(), 1);
+    assert_eq!(reader_std.ranges_v6_compact().len(), 0);
+
+    // Inside sub-range: Hit
+    assert!(reader_std.lookup_u128(sub_from).is_some());
+    assert!(reader_std.lookup_u128(sub_from + 5).is_some());
+    assert!(reader_std.lookup_u128(sub_to).is_some());
+    // Outside sub-range within the same /64: Miss (lossless precision maintained!)
+    assert!(reader_std
+        .lookup_u128(0x2001_0db8_0000_0000_0000_0000_0000_0000)
+        .is_none());
+    assert!(reader_std
+        .lookup_u128(0x2001_0db8_0000_0000_0000_0000_0000_0009)
+        .is_none());
+    assert!(reader_std
+        .lookup_u128(0x2001_0db8_0000_0000_0000_0000_0000_0021)
+        .is_none());
+    assert!(reader_std
+        .lookup_u128(0x2001_0db8_0000_0000_ffff_ffff_ffff_ffff)
+        .is_none());
+
+    // 2. Opt-in Split-64 (Lossy over-approximation) Mode:
+    let split_bin = dir.path().join("sub64_split.bin");
+    let opt_split64 = ipatlas::OptimizationConfig {
+        family: ipatlas::RecordFamily::Compact,
+        split64_v6: true, // explicit opt-in
+        ..Default::default()
+    };
+    compile(
+        CompilerOptions::new(&split_bin)
+            .geo_v6(Some(&geo_v6))
+            .optimization(opt_split64),
+    )
+    .expect("Split64 compilation failed");
+
+    let reader_split = IpAtlasReader::open(&split_bin).unwrap();
+    assert_eq!(reader_split.ranges_v6_compact().len(), 1);
+    assert_eq!(reader_split.ranges_v6().len(), 0);
+
+    // Contract: Split-64 drops the lower 64 bits and over-approximates the entire /64!
+    // Inside sub-range: Hit
+    assert!(reader_split.lookup_u128(sub_from + 5).is_some());
+    // Boundary and outside sub-range within the /64: Hits due to over-approximation contract!
+    assert!(reader_split
+        .lookup_u128(0x2001_0db8_0000_0000_0000_0000_0000_0000)
+        .is_some());
+    assert!(reader_split
+        .lookup_u128(0x2001_0db8_0000_0000_0000_0000_0000_0009)
+        .is_some());
+    assert!(reader_split
+        .lookup_u128(0x2001_0db8_0000_0000_0000_0000_0000_0021)
+        .is_some());
+    assert!(reader_split
+        .lookup_u128(0x2001_0db8_0000_0000_ffff_ffff_ffff_ffff)
+        .is_some());
+    // Different /64 prefix: Miss
+    assert!(reader_split
+        .lookup_u128(0x2001_0db8_0000_0001_0000_0000_0000_0000)
+        .is_none());
 }

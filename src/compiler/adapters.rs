@@ -265,8 +265,18 @@ impl CompactRangePacker {
     }
 }
 
-/// Emits compact 16-byte IPv6 Split-64 ranges, truncating lower 64 bits
-/// and splitting spans > u32::MAX /64 blocks into chunks.
+/// Emits compact 16-byte IPv6 Split-64 ranges (`Ipv6RangeSplit64`).
+///
+/// ### Over-Approximation Contract (Lossy Opt-In)
+/// Truncates the lower 64 bits (`ip >> 64`), mapping all IPv6 addresses within a `/64` prefix
+/// to the same high 64-bit integer.
+/// - **Sub-`/64` Intervals**: Any sub-`/64` span (e.g. `[2001:db8::1, 2001:db8::ffff]`) is
+///   over-approximated to cover the entire `/64` block (`2001:db8::0/64`).
+/// - **Enforced Preconditions**: This format must only be used with explicit user opt-in
+///   (`OptimizationConfig::split64_v6 = true` or CLI `--split64-v6` / `-O split64-v6`).
+///   When intervals are already `/64`-aligned (e.g. standard BGP / RIR allocations),
+///   representation is exact. For sub-`/64` firewall or threat ranges, addresses outside
+///   the exact sub-range will match (over-approximation).
 pub struct Split64RangePacker;
 
 impl Split64RangePacker {

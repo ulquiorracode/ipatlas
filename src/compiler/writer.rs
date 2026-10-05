@@ -122,7 +122,9 @@ impl DatabaseWriter {
         } else {
             RangeStorage::Standard(Vec::new())
         };
-        let storage_v6 = if is_compact {
+        // IPv6 Split-64 (16B) is lossy/over-approximating on sub-/64 spans and requires explicit opt-in (opt.split64_v6).
+        // By default, IPv6 ranges remain lossless Standard (36B) even under compact IPv4 family.
+        let storage_v6 = if opt.split64_v6 {
             RangeStorageV6::Compact(Vec::new())
         } else {
             RangeStorageV6::Standard(Vec::new())
@@ -258,6 +260,7 @@ impl DatabaseWriter {
         }
 
         let is_compact = matches!(self.storage, RangeStorage::Compact(_));
+        let is_compact_v6 = matches!(self.storage_v6, RangeStorageV6::Compact(_));
         let is_soa = self.opt.layout == StorageLayout::Soa;
         let total_records_v4 = match &self.storage {
             RangeStorage::Standard(vec) => vec.len() as u32,
@@ -274,7 +277,7 @@ impl DatabaseWriter {
         } else {
             RECORD_SIZE_IPV4_STANDARD
         };
-        let record_size_v6 = if is_compact {
+        let record_size_v6 = if is_compact_v6 {
             RECORD_SIZE_IPV6_COMPACT
         } else {
             RECORD_SIZE_IPV6_STANDARD

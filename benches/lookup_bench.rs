@@ -355,6 +355,7 @@ fn bench_lookups(c: &mut Criterion) {
 
         let opt = ipatlas::OptimizationConfig {
             family: ipatlas::RecordFamily::Compact,
+            split64_v6: true,
             ..Default::default()
         };
 

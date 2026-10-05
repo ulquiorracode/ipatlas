@@ -12,9 +12,12 @@ pub enum OptRule {
     /// Prune empty/dash string entries so they reference index 0.
     PruneEmpty,
     /// Strip sub-category threat flags, collapsing into generic proxy flag.
+    /// Strip sub-category threat flags, collapsing into generic proxy flag.
     CollapseThreats,
     /// Format V4.1 Compact: 8-byte range intervals (ip_from: u32, count: u16, profile_id: u16).
     CompactRanges,
+    /// Format IPv6 Split-64: 16-byte lossy /64 range intervals (over-approximates sub-/64 spans).
+    Split64V6,
     /// Compress payload via embedded Zstandard frame (zstd-19) for minimal disk footprint.
     EmbeddedZstd,
     /// Structure of Arrays physical storage layout.
@@ -33,6 +36,7 @@ pub struct OptimizationConfig {
     pub prune_empty: bool,
     pub collapse_threats: bool,
     pub compact_ranges: bool,
+    pub split64_v6: bool,
     pub embedded_zstd: bool,
     pub layout: StorageLayout,
     pub family: RecordFamily,
@@ -56,6 +60,7 @@ impl OptimizationConfig {
             prune_empty: true,
             collapse_threats: false,
             compact_ranges: false,
+            split64_v6: false,
             embedded_zstd: false,
             layout: StorageLayout::Aos,
             family: RecordFamily::Standard,
@@ -72,6 +77,7 @@ impl OptimizationConfig {
             prune_empty: true,
             collapse_threats: false,
             compact_ranges: false,
+            split64_v6: false,
             embedded_zstd: false,
             layout: StorageLayout::Aos,
             family: RecordFamily::Standard,
@@ -88,6 +94,7 @@ impl OptimizationConfig {
             prune_empty: true,
             collapse_threats: false,
             compact_ranges: false,
+            split64_v6: false,
             embedded_zstd: false,
             layout: StorageLayout::Aos,
             family: RecordFamily::Standard,
@@ -104,6 +111,7 @@ impl OptimizationConfig {
             prune_empty: true,
             collapse_threats: false,
             compact_ranges: false,
+            split64_v6: false,
             embedded_zstd: false,
             layout: StorageLayout::Aos,
             family: RecordFamily::Standard,
@@ -147,6 +155,7 @@ impl OptimizationConfig {
                 "dedup" | "dedup-profiles" => self.dedup_profiles = true,
                 "normalize-strings" | "norm-str" => self.normalize_strings = true,
                 "lossy-coords" | "lossy" => self.lossy_coords = true,
+                "split64-v6" | "split64" | "lossy-v6" => self.split64_v6 = true,
                 "prune-empty" => self.prune_empty = true,
                 "collapse-threats" => self.collapse_threats = true,
                 "compact" | "compact-ranges" | "v4.1" | "v4-compact" => {
@@ -160,7 +169,7 @@ impl OptimizationConfig {
                 "soa" | "structure-of-arrays" => self.layout = StorageLayout::Soa,
                 "aos" | "array-of-structures" => self.layout = StorageLayout::Aos,
                 "zstd" | "embedded-zstd" => self.embedded_zstd = true,
-                other => return Err(format!("Unknown optimization rule or level: '{}'. Available: 0, 1, 2, 3, coalesce, normalize-strings, lossy-coords, prune-empty, collapse-threats, compact-ranges, soa, aos, embedded-zstd", other)),
+                other => return Err(format!("Unknown optimization rule or level: '{}'. Available: 0, 1, 2, 3, coalesce, normalize-strings, lossy-coords, split64-v6, prune-empty, collapse-threats, compact-ranges, soa, aos, embedded-zstd", other)),
             }
         }
         Ok(())

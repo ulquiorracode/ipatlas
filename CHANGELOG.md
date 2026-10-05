@@ -6,6 +6,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-10-05
+
+### Added
+
+- **IPv6 Split-64 Opt-In Lossy Compression (`Ipv6RangeSplit64`)**:
+  - Implemented 16-byte `/64` compact record format (`ip_from_hi: u64`, `count_hi: u32`, `profile_id: u32`) packing 4 entries per 64-byte CPU cache line with zero straddling (-55.6% memory footprint vs 36-byte records).
+  - Explicit lossy opt-in contract via `--split64-v6` / `-O split64-v6` (`OptimizationConfig::split64_v6 = true`), keeping lossless 36-byte `Ipv6Range` as the safe default for IPv6 even when `--family compact` is specified.
+  - Documented over-approximation contract on sub-`/64` intervals and added verification tests for boundary guarantees.
+- **Experimental Branchless Eytzinger BFS Layout**:
+  - Added cache-friendly Eytzinger array layout and search in benchmarks (`compiler::eytzinger`) with `_mm_prefetch`, clocking **13.55 ns** lookup latency.
+- **Web Framework Integration Guide**:
+  - Added [`docs/INTEGRATION_GUIDE.md`](docs/INTEGRATION_GUIDE.md) providing battle-tested recipes for Axum (`Extension`), Actix-Web, Tower middleware, and zero-downtime hot reloading with `arc-swap`.
+
+### Refactored
+
+- **Uncompromising Generation and Protocol Taxonomy**:
+  - Decoupled container format generations from IP protocol families across all domain models:
+    - `RangeV4` -> `Ipv4Range`, `RangeV4Compact` -> `Ipv4RangeCompact`
+    - `RangeV6` -> `Ipv6Range`, `Ipv6RangeSplit64`
+    - `ProfileV4` -> `ProfileGen4`
+    - `HeaderV4` -> `HeaderGen4`, `HeaderV5` -> `HeaderGen5`
+    - Version constants renamed to `VERSION_GEN4_*` and `VERSION_GEN5_*`.
+- **Pre-Release Version Bump**:
+  - Bumped crate version to `0.10.0`.
+
 ## [0.9.1] - 2026-10-05
 
 ### Added

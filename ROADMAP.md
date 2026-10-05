@@ -121,9 +121,9 @@
 - [x] **Taxonomy & Architecture Formalization**:
   - Strict decoupling of container generations (`Gen4`, `Gen5`) from IP protocols (`Ipv4`, `Ipv6`).
   - Elimination of legacy aliases in favour of explicit domain types.
-- [ ] **Comprehensive Pre-Release Documentation Suite**:
+- [x] **Comprehensive Pre-Release Documentation Suite**:
   - Author `docs/INTEGRATION_GUIDE.md` covering web framework middlewares (Actix, Axum, Tower), zero-downtime hot-reloading, and preset sizing recipes.
-  - Author developer operational runbooks and benchmark methodology documentation.
+  - Plan developer operational runbooks and benchmark methodology documentation before 1.0.0.
 - [ ] **Empirical Verification on Live Production Feeds**:
   - Benchmark Split-64 vs uncompressed 36-byte intervals on dual-stack production feeds.
 
