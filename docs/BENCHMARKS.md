@@ -2,7 +2,7 @@
 
 This document provides a rigorous, empirical, and transparent breakdown of IPAtlas query performance, memory layout trade-offs, and throughput metrics across synthetic L1-resident workloads and global 5.3M production snapshots.
 
-Following the methodological rigor established by Andrew Gallant ([BurntSushi](https://github.com/BurntSushi/ripgrep/blob/master/doc/ANALYSIS.md)) for low-level systems engineering, all claims are paired with exact hardware characteristics, cache line sizing analysis, dataset dimensions, and reproducible commands.
+Following the methodological rigor established by Andrew Gallant ([BurntSushi/rebar](https://github.com/BurntSushi/rebar/blob/master/METHODOLOGY.md)) for low-level systems engineering, all claims are paired with exact hardware characteristics, cache line sizing analysis, dataset dimensions, and reproducible commands.
 
 ---
 
