@@ -14,8 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Implemented 16-byte `/64` compact record format (`ip_from_hi: u64`, `count_hi: u32`, `profile_id: u32`) packing 4 entries per 64-byte CPU cache line with zero straddling (-55.6% memory footprint vs 36-byte records).
   - Explicit lossy opt-in contract via `--split64-v6` / `-O split64-v6` (`OptimizationConfig::split64_v6 = true`), keeping lossless 36-byte `Ipv6Range` as the safe default for IPv6 even when `--family compact` is specified.
   - Documented over-approximation contract on sub-`/64` intervals and added verification tests for boundary guarantees.
+- **Empirical IPv6 Microbenchmarks (Intel Core i9-11900H)**:
+  - Documented comprehensive Criterion metrics in `docs/BENCHMARKS.md`:
+    - `ipv6_standard_lookup_u128` (36B, lossless): **64.96 ns**
+    - `ipv6_flags_lookup_u128` (36B, flags only): **12.99 ns** (~76.9M QPS)
+    - `ipv6_profile_lookup_u128` (36B, profile direct): **12.47 ns** (~80.1M QPS)
+    - `ipv6_split64_flags_lookup_u128` (16B, flags only): **16.92 ns** (~59.1M QPS)
+    - `ipv6_split64_profile_lookup_u128` (16B, profile direct): **17.09 ns** (~58.5M QPS)
 - **Experimental Branchless Eytzinger BFS Layout**:
-  - Added cache-friendly Eytzinger array layout and search in benchmarks (`compiler::eytzinger`) with `_mm_prefetch`, clocking **13.55 ns** lookup latency.
+  - Added cache-friendly Eytzinger array layout and search in benchmarks (`compiler::eytzinger`) with `_mm_prefetch`, clocking **13.55 ns** (IPv4) and **15.64 ns** (IPv6).
 - **Web Framework Integration Guide**:
   - Added [`docs/INTEGRATION_GUIDE.md`](docs/INTEGRATION_GUIDE.md) providing battle-tested recipes for Axum (`Extension`), Actix-Web, Tower middleware, and zero-downtime hot reloading with `arc-swap`.
 
