@@ -1018,14 +1018,12 @@ impl IpAtlasReader {
         match ip {
             IpAddr::V4(v4) => self.lookup_u32(u32::from(v4)),
             IpAddr::V6(v6) => {
-                // Check if IPv4-mapped (::ffff:x.x.x.x) and look up in IPv4 if not in IPv6
-                let ip_u128 = u128::from(v6);
-                if let Some(record) = self.lookup_u128(ip_u128) {
-                    Some(record)
-                } else if let Some(v4) = v6.to_ipv4_mapped() {
+                // Hot-path optimization: IPv4-mapped (::ffff:0:0/96 or ::ffff:x.x.x.x) is directly
+                // routed to fast 32-bit IPv4 lookup, avoiding ~23 cold binary search probes in IPv6 table.
+                if let Some(v4) = v6.to_ipv4_mapped() {
                     self.lookup_u32(u32::from(v4))
                 } else {
-                    None
+                    self.lookup_u128(u128::from(v6))
                 }
             }
         }
@@ -1246,13 +1244,10 @@ impl IpAtlasReader {
         match ip {
             IpAddr::V4(v4) => self.lookup_flags_u32(u32::from(v4)),
             IpAddr::V6(v6) => {
-                let ip_u128 = u128::from(v6);
-                if let Some(flags) = self.lookup_flags_u128(ip_u128) {
-                    Some(flags)
-                } else if let Some(v4) = v6.to_ipv4_mapped() {
+                if let Some(v4) = v6.to_ipv4_mapped() {
                     self.lookup_flags_u32(u32::from(v4))
                 } else {
-                    None
+                    self.lookup_flags_u128(u128::from(v6))
                 }
             }
         }
@@ -1587,13 +1582,10 @@ impl IpAtlasReader {
         match ip {
             IpAddr::V4(v4) => self.lookup_profile_u32(u32::from(v4)),
             IpAddr::V6(v6) => {
-                let ip_u128 = u128::from(v6);
-                if let Some(prof) = self.lookup_profile_u128(ip_u128) {
-                    Some(prof)
-                } else if let Some(v4) = v6.to_ipv4_mapped() {
+                if let Some(v4) = v6.to_ipv4_mapped() {
                     self.lookup_profile_u32(u32::from(v4))
                 } else {
-                    None
+                    self.lookup_profile_u128(u128::from(v6))
                 }
             }
         }

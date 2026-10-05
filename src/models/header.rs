@@ -225,11 +225,19 @@ pub type HeaderV5 = HeaderGen5;
 
 /// Header flags bitmask stored in `HeaderGen5::reserved`.
 pub const HEADER_FLAG_EMBEDDED_ZSTD: u16 = 1 << 2;
+/// Reserved bit for future columnar IPv6 SoA key array (hi: u64 / lo: u64 columnar layouts).
+pub const HEADER_FLAG_SOA_V6: u16 = 1 << 3;
 
 impl HeaderGen5 {
     #[inline(always)]
     pub fn is_soa(&self) -> bool {
         self.version == VERSION_V5_COMPACT_SOA || self.version == VERSION_V5_STANDARD_SOA
+    }
+
+    /// Returns true if IPv6 records are arranged in Structure of Arrays columnar layout.
+    #[inline(always)]
+    pub fn is_soa_v6(&self) -> bool {
+        (self.reserved & HEADER_FLAG_SOA_V6) != 0
     }
 
     #[inline(always)]

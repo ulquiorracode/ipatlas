@@ -97,6 +97,26 @@ fn test_v5_dualstack_compilation_and_lookup() {
 
     // Miss lookup
     assert!(reader.lookup_str("2001:db8::2000").is_none());
+
+    // 5. Test IPv4-mapped IPv6 Address Lookup (::ffff:1.0.1.5)
+    // Verifies fast-path bit-test routing without cold-probing v6 table.
+    let mapped_rec = reader
+        .lookup_str("::ffff:1.0.1.5")
+        .expect("IPv4-mapped IPv6 lookup failed");
+    assert!(!mapped_rec.is_v6);
+    assert_eq!(mapped_rec.country, "US");
+    assert_eq!(mapped_rec.city, "Los Angeles");
+    assert!(mapped_rec.flags.is_vpn());
+
+    let mapped_flags = reader
+        .lookup_flags("::ffff:1.0.1.5".parse::<std::net::IpAddr>().unwrap())
+        .expect("IPv4-mapped flags lookup failed");
+    assert!(mapped_flags.is_vpn());
+
+    let mapped_prof = reader
+        .lookup_profile("::ffff:1.0.1.5".parse::<std::net::IpAddr>().unwrap())
+        .expect("IPv4-mapped profile lookup failed");
+    assert_eq!(mapped_prof.country_code(), "US");
 }
 
 #[test]
