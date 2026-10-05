@@ -65,37 +65,88 @@
 
 ---
 
-## v0.8.0 — Dual-Stack IPv6 & WebAssembly Engine 📝 Planned
+## v0.8.0 — Orthogonal Matrix, SoA Columnar Layout & Flags Fast-Path ✅
 
-**Goal:** Deliver full dual-stack IPv4/IPv6 querying, a lightweight WASM compilation target for edge proxies (Cloudflare Workers, Fastly Compute, Envoy), and direct C-ABI exports.
+**Goal:** Decouple binary format dimensions into an orthogonal 3D matrix (`Generation` x `Family` x `Layout`), implement Structure of Arrays (SoA) layout for high cache utilization, and provide zero-allocation security filter APIs.
 
-- [ ] **Dual-Stack IPv6 Support**:
-  - Support full 128-bit IPv6 interval sweep and binary search (`RangeV6` 36 bytes).
-  - Dual-tree header layout with separate IPv4 and IPv6 section offsets.
-- [ ] **WebAssembly (WASM) Reader Target**:
-  - Compile minimal reader to `wasm32-unknown-unknown` and `wasm32-wasip1`.
-  - Zero-heap allocation lookup inside browser/edge sandbox.
-- [ ] **C-ABI Shared Library (`libipatlas.so` / `ipatlas.dll`)**:
-  - Expose safe C-compatible exports (`ipatlas_open`, `ipatlas_lookup_ipv4`, `ipatlas_close`).
-  - Provide C/C++ header `ipatlas.h` for integration into nginx, HAProxy, and game servers.
-
----
-
-## v0.9.0 — Real-Time Memory Map Hot-Reload & Dynamic Feeds 📝 Planned
-
-**Goal:** Support continuous in-flight database updates without server restarts, lock contention, or connection drops.
-
-- [ ] **Atomic `mmap` Pointer Swapping**:
-  - Thread-safe `ArcSwap` / generational pointer wrapper allowing background reloading of `.bin` files while lookups proceed concurrently.
-- [ ] **Delta Feed Ingestion**:
-  - Incremental update stream format applying IP reputation additions and revocations directly in memory.
+- [x] **Orthogonal 3D Format Matrix**:
+  - Independent dimensions: `ContainerVersion` (V4/V5), `RecordFamily` (Standard/Compact), `StorageLayout` (AoS/SoA).
+  - Explicit container version constant matrix (`0x0400`..`0x0503`).
+- [x] **Structure of Arrays (SoA) Layout**:
+  - Columnar interval tables with 100% cache-line utilization (16 `u32` keys per 64-byte L1 cache line).
+  - Reduced random lookup latency down to **15.4 ns** (L1 cache-fit) and **84.2 ns** (5.3M production snapshot).
+- [x] **Flags-Only Query Primitives**:
+  - Stringless zero-allocation fast-paths: `lookup_flags_u32`, `is_threat_u32`, `is_proxy_u32`, `is_datacenter_u32`, `lookup_country_code_u32`.
+  - Achieves **11.88M QPS** for firewall packet inspection.
 
 ---
 
-## v1.0.0 — Production LTS Release 📝 Planned
+## v0.9.0 — Profile-Only Fast-Path & Empirical Dual-Stack Benchmarks ✅
 
-**Goal:** Establish formal binary container stability (SemVer 1.0 guarantee), finalized C and Rust APIs, and comprehensive ecosystem benchmarks.
+**Goal:** Expose direct metadata fast-paths for stitch-rs integration, conduct empirical 128-bit IPv6 performance analysis, and implement offline AoS <-> SoA database conversion.
 
-- [ ] Frozen binary specification with forward and backward compatibility guarantees.
-- [ ] High-volume integration test suite against 100M+ real-world query traces.
-- [ ] Official documentation portal and precompiled binary releases across Linux, Windows, and macOS.
+- [x] **Profile-Only Fast-Path API**:
+  - Direct 20-byte metadata struct access (`lookup_profile_u32`, `lookup_profile_u128`, `lookup_profile_addr`) in **13.6–14.1 ns** without string allocations.
+- [x] **IPv6 Empirical Benchmarks & Straddling Analysis**:
+  - Extended Criterion test suite for 128-bit intervals (68.85 ns full record, 13.64 ns profile-only).
+  - Quantified 36-byte cache-line straddling phenomenon in `docs/BENCHMARKS.md`.
+- [x] **Zero-Allocation Pipeline Views (`stitch-rs`)**:
+  - Added `LookupOutcomeRef` for borrowing strings directly from mmap buffers.
+- [x] **CLI Image Conversion Utility**:
+  - Added `ipatlas convert` to repack databases between AoS and SoA columnar layouts in sub-50ms.
+
+---
+
+## v0.9.1 — Modular Codebase Architecture & Data Compliance ✅
+
+**Goal:** Modularize internal architecture to eliminate monolithic source files, harden mmap safety boundaries, and establish official legal compliance and licensing guidelines.
+
+- [x] **Modular Reader Architecture**:
+  - Decomposed `src/reader/` into `error.rs`, `buffer.rs`, `dispatch.rs`, and `strings.rs` while retaining 100% API compatibility.
+- [x] **Modular CLI Architecture**:
+  - Reduced `src/main.rs` to 25 lines, organizing CLI logic into `src/cli/` (`args.rs`, `commands.rs`, `convert.rs`, `bench.rs`).
+- [x] **Data Compliance & Licensing Architecture**:
+  - Published `docs/DATA_COMPLIANCE.md`: Engine (MIT) vs Data separation, CC BY-SA 4.0 attribution, and GDPR coarse location compliance.
+
+---
+
+## v0.10.0 — IPv6 Split-64 Truncation & Branchless Eytzinger Search 📝 Planned
+
+**Goal:** Eliminate 128-bit cache-line straddling, compress IPv6 entries down to 16 bytes, and introduce branchless Eytzinger array search.
+
+- [ ] **IPv6 Split-64 Range Truncation**:
+  - Truncate IPv6 search keys to upper 64 bits (`u64`), shrinking packed records from 36B to 16B (4 entries per 64B cache line).
+  - Sub-/64 micro-exception table for granular edge allocations.
+- [ ] **Branchless Eytzinger Search (BFS Array)**:
+  - Cache-friendly array layout with `_mm_prefetch` for predictable latency and elimination of branch mispredictions.
+- [ ] **Empirical Verification**:
+  - Benchmark Split-64 vs naive 128-bit intervals on dual-stack production feeds.
+
+---
+
+## v0.11.0 — Ecosystem Drop-In Integrations & Fuzz-Proof Validation 📝 Planned
+
+**Goal:** Turn IPAtlas into an effortless drop-in middleware for Rust web frameworks and harden mmap parsing against malicious corruption.
+
+- [ ] **Web Framework Middlewares**:
+  - `ipatlas-tower` / `ipatlas-axum` crate providing plug-and-play client geolocation and threat blocking layers.
+  - Zero-copy request extensions with ergonomic extractor primitives.
+- [ ] **Continuous Fuzzing Suite**:
+  - `cargo-fuzz` harness targeting malformed headers, invalid string offsets, and corrupted interval tables.
+- [ ] **Thread-Safe Hot-Reload Abstraction**:
+  - Background atomic swapping of mmap database handles without dropped queries.
+
+---
+
+## v1.0.0 — Production LTS & Format Freeze 📝 Planned
+
+**Goal:** Freeze binary container format specification (SemVer 1.0 guarantee), deliver official C-ABI and WASM targets, and publish 100M+ query verification traces.
+
+- [ ] **Binary Format Freeze**:
+  - Guarantee forward and backward compatibility across V4 and V5 generation containers.
+- [ ] **C-ABI Shared Library & Header**:
+  - `libipatlas` with `ipatlas.h` for nginx, HAProxy, Envoy, and game servers.
+- [ ] **WebAssembly (WASM) Target**:
+  - Compile reader to `wasm32-wasip1` / `wasm32-unknown-unknown` for edge workers (Cloudflare, Fastly).
+- [ ] **Production Verification**:
+  - 100M+ real-world query traces benchmarked on AMD Ryzen and ARM Neoverse platforms.
