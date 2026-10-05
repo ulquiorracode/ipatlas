@@ -108,7 +108,15 @@ fn bench_lookups(c: &mut Criterion) {
         });
     });
 
-    // 3c. Direct threat predicate check (is_threat)
+    // 3c. Profile-only fast path (Returns raw 20B ProfileV4 without string resolution)
+    group.bench_function("profile_only_lookup_u32", |b| {
+        b.iter(|| {
+            let res = reader_compact.lookup_profile_u32(black_box(target_u32));
+            black_box(res)
+        });
+    });
+
+    // 3d. Direct threat predicate check (is_threat)
     group.bench_function("is_threat_predicate_u32", |b| {
         b.iter(|| {
             let res = reader_compact.is_threat_u32(black_box(target_u32));
@@ -247,6 +255,69 @@ fn bench_lookups(c: &mut Criterion) {
         b.iter(|| {
             let decompressed = zstd::decode_all(&chunk_256k_data[..]).unwrap();
             black_box(decompressed.len())
+        });
+    });
+
+    // 8. IPv6 Dual-Stack (128-bit) Evaluation (36B RangeV6)
+    let (_dir_v6, bin_path_v6) = {
+        let dir = tempdir().unwrap();
+        let geo_v6_path = dir.path().join("bench_v6_geo.csv");
+        let px_v6_path = dir.path().join("bench_v6_px.csv");
+        let out_v6_bin = dir.path().join("bench_v6.bin");
+
+        let mut geo_f = File::create(&geo_v6_path).unwrap();
+        let mut px_f = File::create(&px_v6_path).unwrap();
+
+        let base_v6: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0000;
+        for i in 0..10_000u128 {
+            let ip_from = base_v6 + (i * 65536);
+            let ip_to = ip_from + 65535;
+
+            writeln!(
+                geo_f,
+                "{},{},US,United States,CA,Los Angeles,34.05,-118.24",
+                ip_from, ip_to
+            )
+            .unwrap();
+
+            if i % 4 == 0 {
+                writeln!(
+                    px_f,
+                    "{},{},VPN,US,United States,CA,Los Angeles,Cloud Provider,host.com,DCH,13335,AS_NAME,2026-01-01,VPN",
+                    ip_from, ip_to
+                )
+                .unwrap();
+            }
+        }
+
+        let opts = CompilerOptions::new(&out_v6_bin)
+            .geo_v6(Some(&geo_v6_path))
+            .proxy_v6(Some(&px_v6_path));
+
+        compile(opts).unwrap();
+        (dir, out_v6_bin)
+    };
+    let reader_v6 = IpAtlasReader::open(&bin_path_v6).unwrap();
+    let target_v6: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0000 + (5000 * 65536) + 10;
+
+    group.bench_function("ipv6_standard_lookup_u128", |b| {
+        b.iter(|| {
+            let res = reader_v6.lookup_u128(black_box(target_v6));
+            black_box(res)
+        });
+    });
+
+    group.bench_function("ipv6_flags_lookup_u128", |b| {
+        b.iter(|| {
+            let res = reader_v6.lookup_flags_u128(black_box(target_v6));
+            black_box(res)
+        });
+    });
+
+    group.bench_function("ipv6_profile_lookup_u128", |b| {
+        b.iter(|| {
+            let res = reader_v6.lookup_profile_u128(black_box(target_v6));
+            black_box(res)
         });
     });
 

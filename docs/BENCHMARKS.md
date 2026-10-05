@@ -68,15 +68,19 @@ Measured with Criterion.rs (10,000 intervals, hot-cache evaluation):
 
 | Benchmark Name | Sample Size | Latency ($T_{\text{avg}}$) | Description |
 | :--- | :--- | :--- | :--- |
-| `lookup/hot_l1_lookup_u32` | 100 samples | **63.02 ns** | Repeated hit on identical hot range within L1d |
-| `lookup/random_cache_miss_lookup_u32` | 100 samples | **23.58 ns** | Bound-checked key access |
-| `lookup/compact_v4_1_lookup_u32` | 100 samples | **67.32 ns** | AoS binary search over 10k compact records |
-| `lookup/soa_compact_lookup_u32` | 100 samples | **60.34 ns** | SoA columnar binary search over 10k compact records |
-| `lookup/flags_only_lookup_u32` | 100 samples | **16.99 ns** | Pure firewall bitmask lookup (AoS) |
-| `lookup/soa_compact_flags_u32` | 100 samples | **17.08 ns** | Pure firewall bitmask lookup (SoA) |
-| `lookup/is_threat_predicate_u32` | 100 samples | **16.15 ns** | Single-cycle predicate boolean check |
-| `lookup/owned_strings_lookup` | 100 samples | **217.57 ns** | Legacy owned `String` allocation path |
-| `lookup/succinct_elias_fano_lookup` | 100 samples | **297.68 ns** | Bitvector select/rank binary search |
+| `lookup/hot_l1_lookup_u32` | 100 samples | **66.78 ns** | Repeated hit on identical hot range within L1d |
+| `lookup/random_cache_miss_lookup_u32` | 100 samples | **26.65 ns** | Bound-checked key access |
+| `lookup/compact_v4_1_lookup_u32` | 100 samples | **66.74 ns** | AoS binary search over 10k compact records |
+| `lookup/soa_compact_lookup_u32` | 100 samples | **63.87 ns** | SoA columnar binary search over 10k compact records |
+| `lookup/flags_only_lookup_u32` | 100 samples | **15.67 ns** | Pure firewall bitmask lookup (AoS) |
+| `lookup/soa_compact_flags_u32` | 100 samples | **16.26 ns** | Pure firewall bitmask lookup (SoA) |
+| `lookup/profile_only_lookup_u32` | 100 samples | **14.18 ns** | Fast-path zero-alloc raw 20B `ProfileV4` retrieval |
+| `lookup/is_threat_predicate_u32` | 100 samples | **17.74 ns** | Single-cycle predicate boolean check |
+| `lookup/owned_strings_lookup` | 100 samples | **186.70 ns** | Legacy owned `String` allocation path |
+| `lookup/succinct_elias_fano_lookup` | 100 samples | **314.28 ns** | Bitvector select/rank binary search |
+| `lookup/ipv6_standard_lookup_u128` | 100 samples | **68.85 ns** | 128-bit IPv6 full record lookup (`RangeV6` 36B) |
+| `lookup/ipv6_flags_lookup_u128` | 100 samples | **14.48 ns** | 128-bit IPv6 flags-only fast path |
+| `lookup/ipv6_profile_lookup_u128` | 100 samples | **13.64 ns** | 128-bit IPv6 raw `ProfileV4` metadata profile |
 
 ---
 
@@ -86,10 +90,10 @@ Evaluation of decompression latency across chunk boundaries for blocked containe
 
 | Chunk Size | Uncompressed Records (8B) | Zstd Decompression Latency | Throughput | Trade-off Analysis |
 | :--- | :--- | :--- | :--- | :--- |
-| **4 KB** | 512 records | **25.56 µs** | 160.2 MB/s | Page-aligned, excessive zstd frame overhead |
-| **16 KB** | 2,048 records | **45.99 µs** | 356.2 MB/s | Intermediate balance |
-| **64 KB** | 8,192 records | **84.66 µs** | 774.2 MB/s | **Sweet Spot**: Fits in L2, optimal framing ratio |
-| **256 KB** | 32,768 records | **87.56 µs** | 2,987 MB/s | Maximum compression ratio, higher latency penalty |
+| **4 KB** | 512 records | **27.49 µs** | 148.9 MB/s | Page-aligned, excessive zstd frame overhead |
+| **16 KB** | 2,048 records | **50.37 µs** | 325.2 MB/s | Intermediate balance |
+| **64 KB** | 8,192 records | **89.57 µs** | 731.8 MB/s | **Sweet Spot**: Fits in L2, optimal framing ratio |
+| **256 KB** | 32,768 records | **101.45 µs** | 2,578 MB/s | Maximum compression ratio, higher latency penalty |
 
 ---
 
@@ -105,3 +109,30 @@ Evaluation of decompression latency across chunk boundaries for blocked containe
    - Binary search requires $\approx 23$ iterations. The first 15–18 iterations jump across non-contiguous memory segments that exceed CPU L3 cache size.
    - Therefore, memory bus latency ($t_{\text{CAS}} \approx 50\text{ ns}$) bounds both AoS and SoA.
    - Despite this, SoA achieves **5.18M QPS (193 ns)** compared to AoS's **4.87M QPS (205 ns)** — yielding a genuine **6% throughput improvement** on 5.3M records while cutting memory bandwidth contention during multi-threaded lookups (**64.5M QPS**).
+
+---
+
+## 7. IPv6 (128-bit) Dual-Stack Performance & Cache-Line Straddling Analysis
+
+### The 36-Byte Struct Impedance:
+In the Generation V5 Dual-Stack format, IPv6 ranges are represented by `RangeV6`:
+```rust
+#[repr(C, packed)]
+pub struct RangeV6 {
+    pub ip_from: u128,      // 16 bytes
+    pub ip_to: u128,        // 16 bytes
+    pub profile_id: u32,    // 4 bytes
+}                           // Total = 36 bytes
+```
+
+### Empirical Observations & Hardware Bottleneck:
+1. **Cache Line Misalignment**:
+   - A standard CPU cache line is 64 bytes. Since $\text{gcd}(36, 64) = 4 \neq 36$, contiguous 36-byte records do not align with 64-byte hardware boundaries.
+   - Specifically, index 0 occupies bytes `[0..36]`, index 1 occupies bytes `[36..72]` (straddling lines 0 and 1), and index 2 occupies bytes `[72..108]`.
+   - **Result**: Exactly **50% of all lookups** in an AoS `RangeV6` array cross a cache line boundary, forcing the hardware memory controller to issue **two L1/L2 cache accesses** per binary search partition step.
+2. **Synthetic L1-Resident Speed**:
+   - In 10k benchmarks where the entire table fits in CPU cache, IPv6 full record lookups take **68.85 ns** (`lookup_u128`), and flags/profile lookups take **13.64–14.48 ns**.
+3. **Roadmap & Milestone Evaluation**:
+   - On full production IPv6 datasets (spanning 3.5M–6M ranges, ~150–220 MB RAM), 36-byte cache-line straddling will amplify DRAM bus saturation.
+   - Architectural resolution (Columnar SoA for IPv6: 128-bit `ip_from` array with exactly 4 keys per 64-byte line) is scoped for the **v0.10.0** milestone.
+

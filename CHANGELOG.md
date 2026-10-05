@@ -6,6 +6,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-10-05
+
+### Added
+
+- **Profile-Only Direct Fast-Path API**:
+  - Added zero-allocation accessors returning the raw 20-byte normalized [`ProfileV4`] metadata struct directly:
+    - `IpAtlasReader::lookup_profile_u32(ip: u32) -> Option<&ProfileV4>`
+    - `IpAtlasReader::lookup_profile_u128(ip: u128) -> Option<&ProfileV4>`
+    - `IpAtlasReader::lookup_profile_addr(ip: IpAddr) -> Option<&ProfileV4>`
+    - `IpAtlasReader::lookup_profile(ip: impl Into<IpAddr>) -> Option<&ProfileV4>`
+  - Allows consumers to instantly retrieve coordinates (`latitude()`, `longitude()`), ASN (`asn`), flags (`flags`), and ISO country code (`country_code()`) in **13.6–14.1 ns** without parsing or allocating string records.
+- **IPv6 Dual-Stack (128-bit) Empirical Benchmarks & Straddling Analysis**:
+  - Extended Criterion testbed in `benches/lookup_bench.rs` with 10,000 IPv6 ranges:
+    - `ipv6_standard_lookup_u128`: **68.85 ns** (36-byte packed `RangeV6`).
+    - `ipv6_flags_lookup_u128`: **14.48 ns**.
+    - `ipv6_profile_lookup_u128`: **13.64 ns**.
+  - Documented 36-byte cache-line straddling phenomenon in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md), establishing baseline metrics for the planned v0.10.0 128-bit SoA container.
+- **Zero-Allocation Pipeline Outcome Views (`stitch-rs`)**:
+  - Added `LookupOutcomeRef<'a>` in `pipeline` module for borrowing underlying `GeoRecordRef<'a>` directly from kernel mmap buffers, eliminating unwanted 4-string heap allocation penalty on the pipeline hot path.
+- **CLI Image Conversion Utility**:
+  - Added `ipatlas convert <input> <output> --layout <soa|aos>` to repack databases between AoS and SoA columnar layouts in sub-50ms without re-compiling raw CSV sources.
+
+### Changed
+
+- Updated version to `0.9.0`.
+- Documented comprehensive empirical benchmarks in `docs/BENCHMARKS.md` and updated `README.md` matrix with both 5.3M DRAM and 10k L1 cache-fit measurements.
+
 ## [0.8.0] - 2026-10-05
 
 ### Added

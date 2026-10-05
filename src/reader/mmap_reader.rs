@@ -1489,4 +1489,187 @@ impl IpAtlasReader {
     pub fn is_datacenter(&self, ip: impl Into<IpAddr>) -> bool {
         self.lookup_flags(ip).is_some_and(|f| f.is_datacenter())
     }
+
+    /// Fast-path lookup returning the raw normalized 20-byte [`ProfileV4`] metadata profile
+    /// for an IPv4 address without resolving any strings or performing allocations.
+    #[inline]
+    pub fn lookup_profile_u32(&self, ip: u32) -> Option<&ProfileV4> {
+        let profile_id = match self.dispatch {
+            TableDispatch::V4StandardSoa {
+                ip_from_off,
+                ip_to_off,
+                prof_off,
+                count,
+            }
+            | TableDispatch::V5StandardSoa {
+                ip_from_off,
+                ip_to_off,
+                prof_off,
+                count,
+            } => {
+                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
+                let ip_froms: &[u32] = unsafe {
+                    std::slice::from_raw_parts(
+                        self.mmap.as_ptr().add(ip_from_off) as *const u32,
+                        count,
+                    )
+                };
+                let idx = match ip_froms.binary_search(&ip) {
+                    Ok(i) => i,
+                    Err(0) => return None,
+                    Err(i) => i - 1,
+                };
+                let tos: &[u32] = unsafe {
+                    std::slice::from_raw_parts(
+                        self.mmap.as_ptr().add(ip_to_off) as *const u32,
+                        count,
+                    )
+                };
+                let ip_to = *tos.get(idx)?;
+                if ip > ip_to {
+                    return None;
+                }
+                let prof_ids: &[u32] = unsafe {
+                    std::slice::from_raw_parts(
+                        self.mmap.as_ptr().add(prof_off) as *const u32,
+                        count,
+                    )
+                };
+                *prof_ids.get(idx)? as usize
+            }
+            TableDispatch::V4CompactSoa {
+                ip_from_off,
+                counts_off,
+                prof_off,
+                count,
+            }
+            | TableDispatch::V5CompactSoa {
+                ip_from_off,
+                counts_off,
+                prof_off,
+                count,
+            } => {
+                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
+                let ip_froms: &[u32] = unsafe {
+                    std::slice::from_raw_parts(
+                        self.mmap.as_ptr().add(ip_from_off) as *const u32,
+                        count,
+                    )
+                };
+                let idx = match ip_froms.binary_search(&ip) {
+                    Ok(i) => i,
+                    Err(0) => return None,
+                    Err(i) => i - 1,
+                };
+                let ip_from = ip_froms[idx];
+                let counts: &[u16] = unsafe {
+                    std::slice::from_raw_parts(
+                        self.mmap.as_ptr().add(counts_off) as *const u16,
+                        count,
+                    )
+                };
+                let count_val = *counts.get(idx)?;
+                if ip > ip_from.saturating_add(count_val as u32) {
+                    return None;
+                }
+                let prof_ids: &[u16] = unsafe {
+                    std::slice::from_raw_parts(
+                        self.mmap.as_ptr().add(prof_off) as *const u16,
+                        count,
+                    )
+                };
+                *prof_ids.get(idx)? as usize
+            }
+            TableDispatch::V4CompactAos { offset, count }
+            | TableDispatch::V5CompactAos { offset, count } => {
+                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
+                let ranges: &[RangeV4Compact] = unsafe {
+                    std::slice::from_raw_parts(
+                        self.mmap.as_ptr().add(offset) as *const RangeV4Compact,
+                        count,
+                    )
+                };
+                let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
+                    Ok(i) => i,
+                    Err(0) => return None,
+                    Err(i) => i - 1,
+                };
+                let range = ranges.get(idx)?;
+                if !range.contains(ip) {
+                    return None;
+                }
+                range.profile_id as usize
+            }
+            TableDispatch::V4StandardAos { offset, count }
+            | TableDispatch::V5StandardAos { offset, count } => {
+                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
+                let ranges: &[RangeV4] = unsafe {
+                    std::slice::from_raw_parts(
+                        self.mmap.as_ptr().add(offset) as *const RangeV4,
+                        count,
+                    )
+                };
+                let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
+                    Ok(i) => i,
+                    Err(0) => return None,
+                    Err(i) => i - 1,
+                };
+                let range = ranges.get(idx)?;
+                if !range.contains(ip) {
+                    return None;
+                }
+                range.profile_id as usize
+            }
+            TableDispatch::Empty => return None,
+        };
+
+        let profiles = self.profiles();
+        profiles.get(profile_id)
+    }
+
+    /// Fast-path lookup returning the raw normalized 20-byte [`ProfileV4`] metadata profile
+    /// for an IPv6 128-bit address.
+    #[inline]
+    pub fn lookup_profile_u128(&self, ip: u128) -> Option<&ProfileV4> {
+        let ranges = self.ranges_v6();
+        if ranges.is_empty() {
+            return None;
+        }
+
+        let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
+            Ok(i) => i,
+            Err(0) => return None,
+            Err(i) => i - 1,
+        };
+        let range = ranges.get(idx)?;
+        if !range.contains(ip) {
+            return None;
+        }
+        let profiles = self.profiles();
+        profiles.get(range.profile_id as usize)
+    }
+
+    /// Fast-path lookup returning the raw [`ProfileV4`] metadata profile for an `IpAddr`.
+    #[inline]
+    pub fn lookup_profile_addr(&self, ip: IpAddr) -> Option<&ProfileV4> {
+        match ip {
+            IpAddr::V4(v4) => self.lookup_profile_u32(u32::from(v4)),
+            IpAddr::V6(v6) => {
+                let ip_u128 = u128::from(v6);
+                if let Some(prof) = self.lookup_profile_u128(ip_u128) {
+                    Some(prof)
+                } else if let Some(v4) = v6.to_ipv4_mapped() {
+                    self.lookup_profile_u32(u32::from(v4))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Fast-path lookup returning the raw [`ProfileV4`] metadata profile for an IP address.
+    #[inline(always)]
+    pub fn lookup_profile(&self, ip: impl Into<IpAddr>) -> Option<&ProfileV4> {
+        self.lookup_profile_addr(ip.into())
+    }
 }
