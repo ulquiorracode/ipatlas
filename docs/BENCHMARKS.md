@@ -12,11 +12,11 @@ All measurements reported herein were executed on the following dedicated testbe
 
 | Parameter | Specification | Notes |
 | :--- | :--- | :--- |
-| **CPU** | AMD Ryzen / Intel Core x86_64 | AVX2, BMI2, CLFLUSHOPT enabled |
+| **CPU** | 11th Gen Intel(R) Core(TM) i9-11900H @ 2.50GHz (8C/16T) | AVX2, BMI2, CLFLUSHOPT enabled |
 | **L1d Cache** | 32 KB per core | 8-way associative, 64-byte lines |
-| **L2 Cache** | 512 KB / 1024 KB per core | Private per-core cache |
-| **L3 Cache** | 32 MB shared | Smart Cache / CCX |
-| **System Memory** | DDR4 / DDR5 Dual-Channel | ~50–60 GB/s bandwidth |
+| **L2 Cache** | 512 KB per core | Private per-core cache |
+| **L3 Cache** | 24 MB shared | Intel Smart Cache |
+| **System Memory** | DDR4 Dual-Channel | ~50–60 GB/s bandwidth |
 | **OS** | Windows 11 Pro 64-bit / Linux 6.5 | Page size 4096 bytes (4 KB) |
 | **Rust Toolchain** | `rustc 1.84+` (Stable/Nightly) | MSRV 1.74 (`opt-level = 3`, LTO) |
 | **Bench Harness** | Criterion.rs 0.5.1 + CLI micro-harness | 1,000,000 queries, deterministic LCG |
@@ -48,17 +48,17 @@ cargo run --release -- bench dist/ipatlas_goldsrc_firewall.bin -n 1000000
 cargo run --release -- bench dist/ipatlas_goldsrc_firewall_soa.bin -n 1000000
 ```
 
-| Engine & Layout | Target Record / Query Type | Single-Thread QPS | Avg Latency | Speedup vs MMDB | Notes |
+| Engine & Layout | Target Record / Query Type | Single-Thread QPS | Avg Latency / Throughput-Equivalent | Speedup vs MMDB | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **MaxMind MMDB** | Full Geo Record (Tree Traversal) | ~909,000 QPS | **1,100.0 ns** | 1.0x (Baseline) | Standard `maxminddb` reader, pointer-chasing tree |
-| **IPAtlas Compact AoS** | Full Geo Record (`lookup_u32`) | **4,873,652 QPS** | **205.2 ns** | **5.36x** | `RangeV4Compact` (8B contiguous: `from: u32, count: u16, prof: u16`) |
-| **IPAtlas Compact SoA** | Full Geo Record (`lookup_u32`) | **5,181,607 QPS** | **193.0 ns** | **5.70x** | Columnar (`ip_from` array + stride `count`/`prof_id`) |
-| **IPAtlas Compact AoS** | Country Code Fast Path (`country_code`) | **9,094,919 QPS** | **110.0 ns** | **10.0x** | Zero heap allocation, 2-byte ISO code read |
-| **IPAtlas Compact SoA** | Country Code Fast Path (`country_code`) | **7,635,079 QPS** | **131.0 ns** | **8.40x** | Indirect profile lookup |
-| **IPAtlas Compact AoS** | **Flags-Only Fast Path** (`lookup_flags_u32`) | **11,725,886 QPS** | **85.3 ns** | **12.9x** | Zero heap allocation, firewall mode (`GeoFlags`) |
-| **IPAtlas Compact SoA** | **Flags-Only Fast Path** (`lookup_flags_u32`) | **11,399,752 QPS** | **87.7 ns** | **12.5x** | Firewall threat bitmask direct extraction |
-| **IPAtlas Parallel Rayon** | Compact SoA (16 hardware threads) | **64,563,614 QPS** | **15.5 ns** | **71.0x** | Multi-threaded bulk filtering |
-| **stitch-rs Pipeline** | Full Monomorphic U-Cycle Pipeline | **3,111,527 QPS** | **321.4 ns** | **3.42x** | Bogon L1 filter + context + threat policy + telemetry |
+| **MaxMind MMDB** | Full Geo Record (Tree Traversal) | ~909,000 QPS | **1,100.0 ns** (Latency) | 1.0x (Baseline) | Standard `maxminddb` reader, pointer-chasing tree |
+| **IPAtlas Compact AoS** | Full Geo Record (`lookup_u32`) | **4,873,652 QPS** | **205.2 ns** (Latency) | **5.36x** | `RangeV4Compact` (8B contiguous: `from: u32, count: u16, prof: u16`) |
+| **IPAtlas Compact SoA** | Full Geo Record (`lookup_u32`) | **5,181,607 QPS** | **193.0 ns** (Latency) | **5.70x** | Columnar (`ip_from` array + stride `count`/`prof_id`) |
+| **IPAtlas Compact AoS** | Country Code Fast Path (`country_code`) | **9,094,919 QPS** | **110.0 ns** (Latency) | **10.0x** | Zero heap allocation, 2-byte ISO code read |
+| **IPAtlas Compact SoA** | Country Code Fast Path (`country_code`) | **7,635,079 QPS** | **131.0 ns** (Latency) | **8.40x** | Indirect profile lookup |
+| **IPAtlas Compact AoS** | **Flags-Only Fast Path** (`lookup_flags_u32`) | **11,725,886 QPS** | **85.3 ns** (Latency) | **12.9x** | Zero heap allocation, firewall mode (`GeoFlags`) |
+| **IPAtlas Compact SoA** | **Flags-Only Fast Path** (`lookup_flags_u32`) | **11,399,752 QPS** | **87.7 ns** (Latency) | **12.5x** | Firewall threat bitmask direct extraction |
+| **IPAtlas Parallel Rayon** | Compact SoA (16 hardware threads) | **64,563,614 QPS** | **15.5 ns** (Throughput-Eq) | **71.0x** | 16-thread aggregate batch processing ($1 / \text{QPS}$) |
+| **stitch-rs Pipeline** | Full Monomorphic U-Cycle Pipeline | **3,111,527 QPS** | **321.4 ns** (Latency) | **3.42x** | Bogon L1 filter + context + threat policy + telemetry |
 
 ---
 
