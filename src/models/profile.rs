@@ -1,9 +1,9 @@
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-/// 20-byte normalized metadata profile for an IP range.
+/// 20-byte normalized metadata profile for an IP range (Gen4 / Gen5 container layout).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, FromBytes, IntoBytes, KnownLayout, Immutable)]
-pub struct ProfileV4 {
+pub struct ProfileGen4 {
     pub city_idx: u32,
     pub asn: u32,
     pub country: [u8; 2],
@@ -14,7 +14,12 @@ pub struct ProfileV4 {
     pub lon_fixed: i16,
 }
 
-impl ProfileV4 {
+/// Normalized metadata profile alias.
+pub type Profile = ProfileGen4;
+/// Compatibility alias for [`ProfileGen4`].
+pub type ProfileV4 = ProfileGen4;
+
+impl ProfileGen4 {
     #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     pub const fn new(

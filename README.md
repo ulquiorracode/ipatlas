@@ -61,10 +61,11 @@ GeoIP and threat intelligence datasets (e.g. MaxMind MMDB, IP2Location, IP2Proxy
 - **Three-Dimensional Architecture**:
   - **Presets & Feature Masks**: Strip unneeded metadata to collapse intervals on the fly.
   - **Optimization Levels (`-O`)**: Semantic rules for cascade interval coalescing, string normalization, and symmetric coordinate quantization.
-  - **Generation V4/V5 Layout Tiers**:
-    - **V4-Standard (12B)**: `RangeV4` (`from: u32, to: u32, prof_id: u32`), universal 32-bit profile indexing.
-    - **V4-Compact (8B)**: `RangeV4Compact` (`from: u32, count: u16, prof_id: u16`), 8 records per 64B cache line (-32.4% size).
-    - **V5-Succinct (Elias-Fano)**: Compressed monotone bitvectors reaching ~100% of theoretical Shannon entropy floor.
+  - **Container Generation & Layout Tiers**:
+    - **IPv4 Standard (12B)**: `Ipv4Range` (`from: u32, to: u32, profile_id: u32`), universal 32-bit profile indexing.
+    - **IPv4 Compact (8B)**: `Ipv4RangeCompact` (`from: u32, count: u16, profile_id: u16`), 8 records per 64B cache line (-32.4% size).
+    - **IPv6 Split-64 Compact (16B)**: `Ipv6RangeSplit64` (`from_hi: u64, count_hi: u32, profile_id: u32`), 4 records per 64B cache line with 0% straddling (-55.6% size).
+    - **Gen5 Succinct (Elias-Fano)**: Compressed monotone bitvectors reaching ~100% of theoretical Shannon entropy floor.
 - **Streaming 1D-Sweep Compiler**: Single $O(N + M)$ streaming sweep merging IP2Location and IP2Proxy without loading whole input CSVs into RAM.
 - **Zero-Data-Loss Guarantee**: Preserves disjoint threat ranges occurring outside IP2Location Geo coverage.
 - **Universal Dataset Support**: Dynamic column detection for all IP2Location (`DB1`, `DB3`, `DB5`, `DB11`) and IP2Proxy (`PX1` – `PX12`) formats.
@@ -77,30 +78,33 @@ GeoIP and threat intelligence datasets (e.g. MaxMind MMDB, IP2Location, IP2Proxy
 
 ## Architecture
 
+IPAtlas is engineered as a zero-copy, cache-aligned database engine with strict separation between offline $O(N + M)$ compilation, kernel page-mapped zero-copy runtime, and compile-time monomorphic request pipelines.
+
 ```text
-ipatlas/
-├── models/                         # Domain binary value objects and layouts
-│   ├── header.rs                   # Database container header (magic, flags, CRC32)
-│   ├── range.rs                    # 12B Standard, 8B Compact, and 36B IPv6 structs
-│   ├── profile.rs                  # 32B deduplicated metadata profiles
-│   ├── flags.rs                    # Granular threat bitmask (VPN, Tor, Botnet, Datacenter)
-│   └── crc.rs                      # CRC32 data integrity verification
-├── compiler/                       # Offline data synthesis and transformation engine
-│   ├── sweep.rs                    # 1D streaming sweep line algorithm
-│   ├── adapters.rs                 # Optimization pipeline (-O1..-O3)
-│   ├── format_detector.rs          # Dynamic schema recognition for IP2Location & IP2Proxy
-│   ├── presets.rs                  # Declarative presets (All, Firewall, Country, Compact)
-│   └── succinct.rs                 # Elias-Fano succinct monotone sequence encoder
-├── reader/                         # Production sub-microsecond query runtime
-│   ├── reader.rs                   # Zero-copy memory-mapped search engine
-│   ├── succinct.rs                 # Compressed monotone bitvector binary search
-│   └── decompressor.rs             # Lazy profile decompression for embedded Zstd
-├── pipeline/                       # High-performance U-cycle execution pipeline
-│   ├── pipeline.rs                 # stitch-rs state machine (Intent -> Context -> Outcome)
-│   ├── bogon.rs                    # L1-resident sub-nanosecond RFC1918 filter
-│   └── policy.rs                   # Security policy enforcement (VPN/Proxy rejection)
-└── main.rs                         # CLI frontend (build, inspect, query, benchmark)
+       Input Feeds (IP2Location DB + IP2Proxy PX)
+                          │
+                          ▼
+            [ Streaming 1D Sweep-Line ] ──► Dual Cursor Merging ($O(N + M)$)
+                          │
+                          ▼
+            [ Normalization & Deduplication ] ──► String Blobs & Profile Table
+                          │
+                          ▼
+             [ Flat Binary Container (.bin) ]
+            ┌─────────────┬──────────────────┐
+            │   Header    │  Magic + Offsets │
+            │  IPv4 Table │  8B / 12B Ranges │
+            │  IPv6 Table │  16B / 36B Ranges│
+            │  Profiles   │  20B ProfileGen4 │
+            │  Strings    │  UTF-8 Blob Pool │
+            └─────────────┴──────────────────┘
+                          │
+                          ▼
+               [ Zero-Copy mmap Runtime ] ──► Sub-100ns Binary / Eytzinger Search
 ```
+
+> **Formal Taxonomy & Invariants**:
+> For the complete architectural specification, modular source code layout, and formal taxonomy matrix distinguishing container generations (`Gen4`, `Gen5`) from network protocol spaces (`Ipv4`, `Ipv6`), consult [**`ARCHITECTURE.md`**](ARCHITECTURE.md).
 
 ---
 

@@ -45,3 +45,11 @@ pub(crate) enum TableDispatch {
         count: usize,
     },
 }
+
+/// Pre-validated, branchless dispatch descriptor for IPv6 range tables.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum TableDispatchV6 {
+    Empty,
+    StandardAos { offset: usize, count: usize },
+    Split64Compact { offset: usize, count: usize },
+}

@@ -6,7 +6,7 @@
 //! - Zero runtime cost: Monomorphic iterator adapters inlined by LLVM.
 
 use crate::compiler::sweep::{MergedEntry, MergedEntryV6};
-use crate::models::{quantize_coordinate, FeatureMask, RangeV4Compact};
+use crate::models::{quantize_coordinate, FeatureMask, Ipv4RangeCompact};
 
 // ============================================================================
 // FeatureMask & Coordinate Quantization Adapters
@@ -251,13 +251,45 @@ pub struct CompactRangePacker;
 
 impl CompactRangePacker {
     #[inline]
-    pub fn pack_span(ip_from: u32, ip_to: u32, profile_id: u16, sink: &mut Vec<RangeV4Compact>) {
+    pub fn pack_span(ip_from: u32, ip_to: u32, profile_id: u16, sink: &mut Vec<Ipv4RangeCompact>) {
         let mut curr_from = ip_from;
         while curr_from <= ip_to {
             let span = (ip_to - curr_from).min(u16::MAX as u32);
-            sink.push(RangeV4Compact::new(curr_from, span as u16, profile_id));
+            sink.push(Ipv4RangeCompact::new(curr_from, span as u16, profile_id));
             if span == u16::MAX as u32 && curr_from < u32::MAX - span {
                 curr_from += span + 1;
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+/// Emits compact 16-byte IPv6 Split-64 ranges, truncating lower 64 bits
+/// and splitting spans > u32::MAX /64 blocks into chunks.
+pub struct Split64RangePacker;
+
+impl Split64RangePacker {
+    #[inline]
+    pub fn pack_span(
+        ip_from: u128,
+        ip_to: u128,
+        profile_id: u32,
+        sink: &mut Vec<crate::models::Ipv6RangeSplit64>,
+    ) {
+        let from_hi = (ip_from >> 64) as u64;
+        let to_hi = (ip_to >> 64) as u64;
+
+        let mut curr_from_hi = from_hi;
+        while curr_from_hi <= to_hi {
+            let span_hi = (to_hi - curr_from_hi).min(u32::MAX as u64);
+            sink.push(crate::models::Ipv6RangeSplit64::new(
+                curr_from_hi,
+                span_hi as u32,
+                profile_id,
+            ));
+            if span_hi == u32::MAX as u64 && curr_from_hi < u64::MAX - span_hi {
+                curr_from_hi += span_hi + 1;
             } else {
                 break;
             }

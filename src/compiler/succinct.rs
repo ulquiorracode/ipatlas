@@ -3,7 +3,7 @@
 //! Encodes monotonic IP range boundaries into a compact bitvector with Elias-Fano
 //! quasi-succinct representation, reaching ~100% of the Shannon Entropy limit.
 
-use crate::models::{ProfileV4, RangeV4};
+use crate::models::{Ipv4Range, ProfileGen4};
 
 /// Quasi-succinct bit-packed Elias-Fano interval storage.
 #[derive(Clone, Debug)]
@@ -14,12 +14,12 @@ pub struct SuccinctIntervalTable {
     pub low_bits: Vec<u64>,
     pub high_bits: Vec<u64>,
     pub profile_indices: Vec<u16>,
-    pub profiles: Vec<ProfileV4>,
+    pub profiles: Vec<ProfileGen4>,
 }
 
 impl SuccinctIntervalTable {
     /// Builds a succinct table from a sorted list of non-overlapping intervals.
-    pub fn build(ranges: &[RangeV4], profiles: Vec<ProfileV4>) -> Self {
+    pub fn build(ranges: &[Ipv4Range], profiles: Vec<ProfileGen4>) -> Self {
         let count = ranges.len();
         if count == 0 {
             return Self {
@@ -142,7 +142,7 @@ impl SuccinctIntervalTable {
     }
 
     /// Binary search over succinct intervals.
-    pub fn lookup(&self, ip: u32) -> Option<&ProfileV4> {
+    pub fn lookup(&self, ip: u32) -> Option<&ProfileGen4> {
         if self.count == 0 {
             return None;
         }

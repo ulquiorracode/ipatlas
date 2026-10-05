@@ -41,11 +41,11 @@ IPAtlas structures its physical database containers across three orthogonal dime
 | Tier & Layout | Status | Record Size | Primary Structure | 5.3M Production RAM | Shannon Ratio | Hot L1 Latency | Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$) | vs MaxMind MMDB |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **MaxMind MMDB** *(Baseline)* | Industry Standard | ~22 bytes (tree) | Radix Trie (Chasing) | **115.0 MB** | $6.50 \times H_{\text{raw}}$ | **1,100 ns** | **$126,500\text{ MB}\cdot\text{ns}$** (1.0x baseline) | Reference |
-| **Tier 1: `V4/V5-Standard (AoS)`** | **Production** | 12 bytes | `RangeV4` | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **66.7 ns** | **$4,075\text{ MB}\cdot\text{ns}$** | **31.0x more efficient** |
-| **Tier 2: `V4/V5-Compact (AoS)`** | **Production** | 8 bytes | `RangeV4Compact` | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **60.9 ns** | **$2,515\text{ MB}\cdot\text{ns}$** | **50.3x more efficient** |
-| **Tier 2: `V4/V5-Compact (SoA)`** | **Production** | 8 bytes (columnar) | `soa_ip_from` + `count` + `profile` | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **15.4 ns** | **$636\text{ MB}\cdot\text{ns}$** *(Peak Hardware Sweet Spot)* | **198.8x more efficient** |
+| **Tier 1: `Gen4/Gen5-Standard (AoS)`** | **Production** | 12 bytes | `Ipv4Range` | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **66.7 ns** | **$4,075\text{ MB}\cdot\text{ns}$** | **31.0x more efficient** |
+| **Tier 2: `Gen4/Gen5-Compact (AoS)`** | **Production** | 8 bytes | `Ipv4RangeCompact` | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **60.9 ns** | **$2,515\text{ MB}\cdot\text{ns}$** | **50.3x more efficient** |
+| **Tier 2: `Gen4/Gen5-Compact (SoA)`** | **Production** | 8 bytes (columnar) | `soa_ip_from` + `count` + `profile` | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **15.4 ns** | **$636\text{ MB}\cdot\text{ns}$** *(Peak Hardware Sweet Spot)* | **198.8x more efficient** |
 | **Flags-Only Fast Path (SoA/AoS)** | **Production** | 0B (direct slice) | `lookup_flags_u32` (no strings) | N/A | N/A | **18.5 ns** | N/A | Edge Firewall Mode |
-| **Tier 3: `V5-Succinct`** | **Experimental** *(Non-Prod)* | $\sim 2.8$ bytes | Elias-Fano Bitvector | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
+| **Tier 3: `Gen5-Succinct`** | **Experimental** *(Non-Prod)* | $\sim 2.8$ bytes | Elias-Fano Bitvector | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
 
 ### 2.1 Benchmark Testbed & Reproduction Conditions
 
@@ -74,12 +74,13 @@ Universal layout for unconstrained profile counts ($> 65{,}535$).
 
 - **Alignment**: 4 bytes.
 - **Zero-Copy**: Slices mapped directly via `zerocopy::FromBytes` without conversions.
-- **Binary Search**: Flat binary search over `&[RangeV4]`.
+- **Binary Search**: Flat binary search over `&[Ipv4Range]`.
 
 ---
 
-## 4. Tier 2: V4/V5-Compact (8 Bytes)
+## 4. Tier 2: Compact Formats (IPv4 & IPv6 Split-64)
 
+### 4.1 IPv4 Compact (8 Bytes)
 Engineered for CPU cache line density (8 intervals per 64-byte cache line).
 
 ```text
@@ -94,6 +95,22 @@ Engineered for CPU cache line density (8 intervals per 64-byte cache line).
 - **`profile_id`**: 16-bit normalized profile pointer.
 - **Span Splitting**: Intervals spanning $> 65{,}535$ IPs are sliced into consecutive 8-byte chunks by `CompactRangePacker`.
 - **Automatic Fallback**: If unique profile count exceeds `u16::MAX` (65,535), compiler safely upgrades to `Standard` (12B).
+
+### 4.2 IPv6 Split-64 Compact (`Ipv6RangeSplit64`, 16 Bytes)
+Engineered to eliminate cache-line straddling and shrink 128-bit IPv6 intervals from 36 bytes down to 16 bytes:
+
+```text
++------------------------------------+-------------------+-------------------+
+|       ip_from_hi (u64, 8B)         | count_hi (u32, 4B)| profile (u32, 4B) |
++------------------------------------+-------------------+-------------------+
+0                                    8                   12                  16
+```
+
+- **`ip_from_hi`**: Upper 64 bits of the base IPv6 address (`(ip_from >> 64) as u64`).
+- **`count_hi`**: Number of `/64` blocks spanned minus 1 (`ip_to_hi = ip_from_hi + count_hi`).
+- **`profile_id`**: 32-bit normalized profile pointer.
+- **Cache Alignment**: Exactly **4 records per 64-byte cache line** ($\gcd(16, 64) = 16$), ensuring zero cache-line straddling.
+- **Physical Footprint**: Reduces IPv6 table footprint by **55.6%** (2.25x compression factor).
 
 ---
 

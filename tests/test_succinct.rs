@@ -1,5 +1,5 @@
 use ipatlas::compiler::succinct::SuccinctIntervalTable;
-use ipatlas::models::{ProfileV4, RangeV4};
+use ipatlas::models::{Ipv4Range, ProfileGen4};
 
 #[test]
 fn test_succinct_elias_fano_compression_and_lookup() {
@@ -12,12 +12,12 @@ fn test_succinct_elias_fano_compression_and_lookup() {
         let span = 256;
         let to = curr_ip + span - 1;
         let prof_id = (i % 10) as u32;
-        ranges.push(RangeV4::new(curr_ip, to, prof_id));
+        ranges.push(Ipv4Range::new(curr_ip, to, prof_id));
         curr_ip = to + 1;
     }
 
     for i in 0..10 {
-        profiles.push(ProfileV4::new(i, 100 + i, *b"US", 1, 1, 0, 3700, -12200));
+        profiles.push(ProfileGen4::new(i, 100 + i, *b"US", 1, 1, 0, 3700, -12200));
     }
 
     let raw_v4_bytes = ranges.len() * 12; // 12,000 bytes in V4-Standard

@@ -1,4 +1,5 @@
 pub mod adapters;
+pub mod eytzinger;
 pub mod parser;
 pub mod succinct;
 pub mod sweep;
