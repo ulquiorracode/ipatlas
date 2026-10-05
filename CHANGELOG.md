@@ -6,6 +6,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-10-05
+
+### Added
+
+- **Data Compliance & Licensing Architecture**:
+  - Added official guide [`docs/DATA_COMPLIANCE.md`](docs/DATA_COMPLIANCE.md) clarifying MIT engine boundaries, CC BY-SA 4.0 attribution requirements for IP2Location LITE, commercial feed handling, and GDPR/CCPA coarse location compliance.
+
+### Refactored
+
+- **Modular Reader Architecture**:
+  - Decomposed monolithic `mmap_reader.rs` into specialized submodules under `src/reader/`:
+    - `error.rs`: Centralized `ReaderError` enum with exhaustive variants (`InvalidMagic`, `UnsupportedVersion`, `CrcMismatch`, `OutOfBounds`, `Utf8Error`, `LayoutMismatch`).
+    - `buffer.rs`: `StorageBuffer` abstraction unifying memory-mapped files and heap byte vectors with sound byte slice access.
+    - `dispatch.rs`: `TableDispatch` handling orthogonal runtime dispatch across AoS / SoA and V4 / V5 table types.
+    - `strings.rs`: `StringTableRef` encapsulating zero-copy UTF-8 resolution and slice bounds verification.
+- **Modular CLI Command Architecture**:
+  - Modularized `src/main.rs` down to a lightweight 25-line entrypoint, migrating implementation to `src/cli/`:
+    - `args.rs`: Structured Clap CLI definitions (`Cli`, `Commands`, subcommand argument structs).
+    - `commands.rs`: Compilation, inspection, and lookup workflows.
+    - `convert.rs`: Offline database AoS <-> SoA repack utility.
+    - `bench.rs`: Benchmark execution harness.
+
 ## [0.9.0] - 2026-10-05
 
 ### Added

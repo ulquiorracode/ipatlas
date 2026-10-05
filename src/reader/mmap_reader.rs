@@ -2,7 +2,6 @@ use memmap2::Mmap;
 use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::Path;
-use thiserror::Error;
 use zerocopy::FromBytes;
 
 use crate::models::{
@@ -12,101 +11,15 @@ use crate::models::{
     VERSION_V4_COMPACT_SOA, VERSION_V4_STANDARD, VERSION_V4_STANDARD_AOS, VERSION_V4_STANDARD_SOA,
     VERSION_V5_COMPACT_AOS, VERSION_V5_COMPACT_SOA, VERSION_V5_STANDARD, VERSION_V5_STANDARD_SOA,
 };
-
-#[derive(Error, Debug)]
-pub enum ReaderError {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Database file is too small: {0} bytes")]
-    FileTooSmall(u64),
-    #[error("Corrupted database: {0}")]
-    Corrupted(&'static str),
-    #[error("CRC32 mismatch: expected {expected:#010x}, calculated {actual:#010x}")]
-    CrcMismatch { expected: u32, actual: u32 },
-    #[error("Unsupported database version: {0:#06x}")]
-    UnsupportedVersion(u16),
-    #[error("Decompression error: {0}")]
-    Decompression(String),
-}
+pub use crate::reader::buffer::StorageBuffer;
+pub(crate) use crate::reader::dispatch::TableDispatch;
+pub use crate::reader::error::ReaderError;
+pub(crate) use crate::reader::strings::StringTableRef;
 
 #[derive(Clone, Copy, Debug)]
 pub enum HeaderVariant {
     V4(HeaderV4),
     V5(HeaderV5),
-}
-
-/// Backing storage for zero-copy views: either a zero-copy memory mapping or an in-memory buffer.
-pub enum StorageBuffer {
-    Mmap(Mmap),
-    Memory(Vec<u8>),
-}
-
-impl std::ops::Deref for StorageBuffer {
-    type Target = [u8];
-
-    #[inline(always)]
-    fn deref(&self) -> &[u8] {
-        match self {
-            Self::Mmap(m) => m,
-            Self::Memory(v) => v,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct StringTableRef {
-    pub(crate) count: usize,
-    pub(crate) idx_start: usize,
-    pub(crate) data_start: usize,
-    pub(crate) data_len: usize,
-}
-
-/// Pre-validated, branchless dispatch descriptor for IPv4 range tables and columns.
-/// Evaluated strictly once during `open()` / `from_mmap()`, eliminating repeated
-/// `is_soa()`, `is_compact()`, and `ref_from_bytes` validation on every query.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum TableDispatch {
-    Empty,
-    V4StandardAos {
-        offset: usize,
-        count: usize,
-    },
-    V4CompactAos {
-        offset: usize,
-        count: usize,
-    },
-    V4StandardSoa {
-        ip_from_off: usize,
-        ip_to_off: usize,
-        prof_off: usize,
-        count: usize,
-    },
-    V4CompactSoa {
-        ip_from_off: usize,
-        counts_off: usize,
-        prof_off: usize,
-        count: usize,
-    },
-    V5StandardAos {
-        offset: usize,
-        count: usize,
-    },
-    V5CompactAos {
-        offset: usize,
-        count: usize,
-    },
-    V5StandardSoa {
-        ip_from_off: usize,
-        ip_to_off: usize,
-        prof_off: usize,
-        count: usize,
-    },
-    V5CompactSoa {
-        ip_from_off: usize,
-        counts_off: usize,
-        prof_off: usize,
-        count: usize,
-    },
 }
 
 /// Zero-copy memory-mapped IPAtlas database reader supporting Generation V4 and V5 (Dual-Stack).
@@ -802,57 +715,18 @@ impl IpAtlasReader {
     }
 
     #[inline(always)]
-    fn get_string<'a>(idx_slice: &[u8], total: usize, blob: &'a [u8], idx: usize) -> &'a str {
-        if idx >= total {
-            return "";
-        }
-        let pos = idx * 4;
-        if pos + 4 > idx_slice.len() {
-            return "";
-        }
-        let off = u32::from_le_bytes(idx_slice[pos..pos + 4].try_into().unwrap()) as usize;
-        if off >= blob.len() {
-            return "";
-        }
-        let slice = &blob[off..];
-        let len = memchr::memchr(0, slice).unwrap_or(slice.len());
-        std::str::from_utf8(&slice[..len]).unwrap_or("")
-    }
-
-    #[inline(always)]
     pub fn get_city(&self, idx: usize) -> &str {
-        let i_end = self.cities.idx_start + self.cities.count * 4;
-        let d_end = self.cities.data_start + self.cities.data_len;
-        Self::get_string(
-            &self.mmap[self.cities.idx_start..i_end],
-            self.cities.count,
-            &self.mmap[self.cities.data_start..d_end],
-            idx,
-        )
+        self.cities.resolve(&self.mmap, idx)
     }
 
     #[inline(always)]
     pub fn get_region(&self, idx: usize) -> &str {
-        let i_end = self.regions.idx_start + self.regions.count * 4;
-        let d_end = self.regions.data_start + self.regions.data_len;
-        Self::get_string(
-            &self.mmap[self.regions.idx_start..i_end],
-            self.regions.count,
-            &self.mmap[self.regions.data_start..d_end],
-            idx,
-        )
+        self.regions.resolve(&self.mmap, idx)
     }
 
     #[inline(always)]
     pub fn get_isp(&self, idx: usize) -> &str {
-        let i_end = self.isps.idx_start + self.isps.count * 4;
-        let d_end = self.isps.data_start + self.isps.data_len;
-        Self::get_string(
-            &self.mmap[self.isps.idx_start..i_end],
-            self.isps.count,
-            &self.mmap[self.isps.data_start..d_end],
-            idx,
-        )
+        self.isps.resolve(&self.mmap, idx)
     }
 
     #[inline(always)]
