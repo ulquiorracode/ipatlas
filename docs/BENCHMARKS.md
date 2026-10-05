@@ -147,13 +147,14 @@ Evaluation of decompression latency across chunk boundaries for blocked containe
  
  - **Zero Cache-Line Straddling**: $\gcd(16, 64) = 16$. Exactly **4 records per 64-byte cache line** without crossing line boundaries.
  - **Memory Reduction**: Shrinks table size from $36 \times N$ to $16 \times N$ bytes (**-55.6% RAM** / 2.25x compression factor).
- - **Measured Criterion Latencies (10,000 intervals)**:
-   - `ipv6_standard_lookup_u128` (36B, standard): **67.44 ns**
-   - `ipv6_split64_compact_lookup_u128` (16B, compact): **87.25 ns** (due to 64-bit shift and reconstruction of bounds)
-   - `ipv6_flags_lookup_u128`: **14.01 ns**
-   - `ipv6_split64_flags_lookup_u128`: **18.12 ns**
-   - `ipv6_profile_lookup_u128`: **13.45 ns**
-   - `ipv6_split64_profile_lookup_u128`: **18.75 ns**
+ - **Measured Criterion Latencies (10,000 intervals, Intel Core i9-11900H)**:
+   - `ipv6_standard_lookup_u128` (36B, standard lossless): **64.96 ns**
+   - `ipv6_split64_compact_lookup_u128` (16B, compact lossy): **80.40 ns** (bounds shifting overhead)
+   - `ipv6_flags_lookup_u128` (36B, flags only): **12.99 ns** (~76.9M QPS)
+   - `ipv6_profile_lookup_u128` (36B, profile direct): **12.47 ns** (~80.1M QPS)
+   - `ipv6_split64_flags_lookup_u128` (16B, flags only): **16.92 ns** (~59.1M QPS)
+   - `ipv6_split64_profile_lookup_u128` (16B, profile direct): **17.09 ns** (~58.5M QPS)
+   - `eytzinger_branchless_lookup_v6_u64` (16B BFS array with prefetch): **15.64 ns** (~63.9M QPS)
  
  On large datasets exceeding CPU cache (DRAM-bound regime), the 55.6% memory reduction directly translates into fewer DRAM page misses and significantly lower memory bus contention in multi-threaded query engines.
 

@@ -12,7 +12,6 @@ pub enum OptRule {
     /// Prune empty/dash string entries so they reference index 0.
     PruneEmpty,
     /// Strip sub-category threat flags, collapsing into generic proxy flag.
-    /// Strip sub-category threat flags, collapsing into generic proxy flag.
     CollapseThreats,
     /// Format V4.1 Compact: 8-byte range intervals (ip_from: u32, count: u16, profile_id: u16).
     CompactRanges,
