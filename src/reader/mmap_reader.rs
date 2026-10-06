@@ -52,6 +52,13 @@ impl IpAtlasReader {
         Self::from_mmap(mmap, file_len)
     }
 
+    /// Opens and verifies CRC32 (V5 only; V4 no-op). `open()` stays header-only.
+    pub fn open_verified<P: AsRef<Path>>(path: P) -> Result<Self, ReaderError> {
+        let reader = Self::open(path)?;
+        reader.validate_checksum()?;
+        Ok(reader)
+    }
+
     /// Constructs reader from an existing memory mapping.
     pub fn from_mmap(mmap: Mmap, file_len: u64) -> Result<Self, ReaderError> {
         if file_len < 6 {

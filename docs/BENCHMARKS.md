@@ -66,26 +66,27 @@ cargo run --release -- bench dist/ipatlas_goldsrc_firewall_soa.bin -n 1000000
 
 Measured with Criterion.rs (10,000 intervals, hot-cache evaluation):
 
-| Benchmark Name | Sample Size | Latency ($T_{\text{avg}}$) | Description |
+| Benchmark Name | Sample Size | Latency ({\text{avg}}$) | Description |
 | :--- | :--- | :--- | :--- |
-| `lookup/hot_l1_lookup_u32` | 100 samples | **66.78 ns** | Repeated hit on identical hot range within L1d |
-| `lookup/random_cache_miss_lookup_u32` | 100 samples | **26.65 ns** | Bound-checked key access |
-| `lookup/compact_v4_1_lookup_u32` | 100 samples | **66.74 ns** | AoS binary search over 10k compact records |
-| `lookup/soa_compact_lookup_u32` | 100 samples | **63.87 ns** | SoA columnar binary search over 10k compact records |
-| `lookup/flags_only_lookup_u32` | 100 samples | **15.67 ns** | Pure firewall bitmask lookup (AoS) |
-| `lookup/soa_compact_flags_u32` | 100 samples | **16.26 ns** | Pure firewall bitmask lookup (SoA) |
-| `lookup/profile_only_lookup_u32` | 100 samples | **14.18 ns** | Fast-path zero-alloc raw 20B `ProfileGen4` retrieval |
-| `lookup/is_threat_predicate_u32` | 100 samples | **17.74 ns** | Single-cycle predicate boolean check |
-| `lookup/owned_strings_lookup` | 100 samples | **186.70 ns** | Legacy owned `String` allocation path |
-| `lookup/succinct_elias_fano_lookup` | 100 samples | **314.28 ns** | Bitvector select/rank binary search |
-| `lookup/ipv6_standard_lookup_u128` | 100 samples | **67.44 ns** | 128-bit IPv6 full record lookup (`Ipv6Range` 36B) |
-| `lookup/ipv6_flags_lookup_u128` | 100 samples | **14.01 ns** | 128-bit IPv6 flags-only fast path |
-| `lookup/ipv6_profile_lookup_u128` | 100 samples | **13.45 ns** | 128-bit IPv6 raw `ProfileGen4` metadata profile |
-| `lookup/ipv6_split64_compact_lookup_u128` | 100 samples | **87.25 ns** | 128-bit IPv6 Split-64 Compact (`Ipv6RangeSplit64` 16B) |
-| `lookup/ipv6_split64_flags_lookup_u128` | 100 samples | **18.12 ns** | 128-bit IPv6 Split-64 flags fast path |
-| `lookup/ipv6_split64_profile_lookup_u128` | 100 samples | **18.75 ns** | 128-bit IPv6 Split-64 raw `ProfileGen4` profile |
-
----
+| lookup/hot_l1_lookup_u32 | 100 samples | **69.23 ns** | Repeated hit on identical hot range within L1d |
+| lookup/random_hit_lookup_u32 | 100 samples | **84.37 ns** | Non-cached interval hit (binary search + profile resolution) |
+| lookup/random_cache_miss_lookup_u32 | 100 samples | **23.41 ns** | Pure key probe miss path (returns None immediately) |
+| lookup/compact_v4_1_lookup_u32 | 100 samples | **68.73 ns** | AoS binary search over 10k compact records |
+| lookup/soa_compact_lookup_u32 | 100 samples | **69.43 ns** | SoA columnar binary search over 10k compact records |
+| lookup/flags_only_lookup_u32 | 100 samples | **17.30 ns** | Pure firewall bitmask lookup (AoS) |
+| lookup/soa_compact_flags_u32 | 100 samples | **15.95 ns** | Pure firewall bitmask lookup (SoA) |
+| lookup/profile_only_lookup_u32 | 100 samples | **13.19 ns** | Fast-path zero-alloc raw 20B ProfileGen4 retrieval |
+| lookup/is_threat_predicate_u32 | 100 samples | **15.88 ns** | Single-cycle predicate boolean check |
+| lookup/owned_strings_lookup | 100 samples | **214.53 ns** | Legacy owned String allocation path |
+| lookup/succinct_elias_fano_lookup | 100 samples | **331.66 ns** | Bitvector select/rank binary search |
+| lookup/ipv6_standard_lookup_u128 | 100 samples | **71.10 ns** | 128-bit IPv6 full record lookup (Ipv6Range 36B) |
+| lookup/ipv6_flags_lookup_u128 | 100 samples | **13.51 ns** | 128-bit IPv6 flags-only fast path |
+| lookup/ipv6_profile_lookup_u128 | 100 samples | **13.33 ns** | 128-bit IPv6 raw ProfileGen4 metadata profile |
+| lookup/ipv6_split64_compact_lookup_u128 | 100 samples | **85.69 ns** | 128-bit IPv6 Split-64 Compact (Ipv6RangeSplit64 16B) |
+| lookup/ipv6_split64_flags_lookup_u128 | 100 samples | **17.46 ns** | 128-bit IPv6 Split-64 flags fast path |
+| lookup/ipv6_split64_profile_lookup_u128 | 100 samples | **16.84 ns** | 128-bit IPv6 Split-64 raw ProfileGen4 profile |
+| lookup/eytzinger_branchless_lookup_u32 | 100 samples | **12.60 ns** | Experimental 32-bit BFS array with _mm_prefetch |
+| lookup/eytzinger_branchless_lookup_v6_u64 | 100 samples | **15.22 ns** | Experimental 64-bit BFS array with _mm_prefetch |
 
 ## 5. Decompression Block Sizing Evaluation
 
@@ -93,10 +94,10 @@ Evaluation of decompression latency across chunk boundaries for blocked containe
 
 | Chunk Size | Uncompressed Records (8B) | Zstd Decompression Latency | Throughput | Trade-off Analysis |
 | :--- | :--- | :--- | :--- | :--- |
-| **4 KB** | 512 records | **27.49 µs** | 148.9 MB/s | Page-aligned, excessive zstd frame overhead |
-| **16 KB** | 2,048 records | **50.37 µs** | 325.2 MB/s | Intermediate balance |
-| **64 KB** | 8,192 records | **89.57 µs** | 731.8 MB/s | **Sweet Spot**: Fits in L2, optimal framing ratio |
-| **256 KB** | 32,768 records | **101.45 µs** | 2,578 MB/s | Maximum compression ratio, higher latency penalty |
+| **4 KB** | 512 records | **20.70 µs** | 148.9 MB/s | Page-aligned, excessive zstd frame overhead |
+| **16 KB** | 2,048 records | **48.69 µs** | 325.2 MB/s | Intermediate balance |
+| **64 KB** | 8,192 records | **88.09 µs** | 731.8 MB/s | **Sweet Spot**: Fits in L2, optimal framing ratio |
+| **256 KB** | 32,768 records | **88.00 µs** | 2,578 MB/s | Maximum compression ratio, higher latency penalty |
 
 ---
 

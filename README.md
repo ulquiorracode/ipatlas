@@ -112,14 +112,14 @@ IPAtlas is engineered as a zero-copy, cache-aligned database engine with strict 
 
 IPAtlas provides distinct layout tiers designed around the trade-off between memory footprint, zero-copy alignment, and hardware cache efficiency:
 
-| Layout Tier | Status | Record Size | 5.3M Table RAM | Shannon Ratio | 5.3M Full Snapshot Latency | 10k L1-Fit Latency | Multi-Thread Throughput (16T) | Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$) | vs MaxMind MMDB |
+| Layout Tier | Status | Record Size | 5.3M Table RAM | Shannon Ratio | 5.3M Full Snapshot Latency | 10k L1-Fit Latency | Multi-Thread Throughput-Eq (16T) | Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$) | vs MaxMind MMDB |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **MaxMind MMDB** *(Baseline)* | Industry Standard | ~22 bytes (tree) | **115.0 MB** | $6.50 \times H_{\text{raw}}$ | **1,100 ns** *(DRAM)* | N/A | ~5.8M QPS | **$126,500\text{ MB}\cdot\text{ns}$** (1.0x baseline) | Reference |
 | **`V4/V5-Standard (AoS)`** | **Production** | 12 bytes | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **218.4 ns** *(DRAM)* | **66.7 ns** | ~48.2M QPS | **$13,344\text{ MB}\cdot\text{ns}$** | **9.5x more efficient** |
-| **`V4/V5-Compact (AoS)`** | **Production** | 8 bytes | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **205.2 ns** *(DRAM)* | **67.3 ns** | **62.8M QPS** | **$8,474\text{ MB}\cdot\text{ns}$** | **14.9x more efficient** |
-| **`V4/V5-Compact (SoA)`** (`--layout soa`) | **Production (Opt)** | 8 bytes (columnar) | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **193.0 ns** *(DRAM)* | **60.3 ns** *(15.4ns warm)* | **64.6M QPS** | **$7,970\text{ MB}\cdot\text{ns}$** | **15.9x more efficient** |
-| **Flags-Only Fast Path** | **Production** | Zero-allocation | N/A | N/A | **85.3 ns** *(DRAM)* | **16.9 ns** | **120.0M+ QPS** | N/A | **Edge Firewall Mode** |
-| **`V5-Succinct`** *(Shannon Bound)* | **Experimental** *(Non-Prod)* | ~2.8 bytes (E-F) | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** *(DRAM)* | **297.7 ns** | N/A | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
+| **`V4/V5-Compact (AoS)`** | **Production** | 8 bytes | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **205.2 ns** *(DRAM)* | **68.7 ns** | **62.8M QPS** | **$8,474\text{ MB}\cdot\text{ns}$** | **14.9x more efficient** |
+| **`V4/V5-Compact (SoA)`** (`--layout soa`) | **Production (Opt)** | 8 bytes (columnar) | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **193.0 ns** *(DRAM)* | **69.4 ns** *(15.9ns flags)* | **64.6M QPS** | **$7,970\text{ MB}\cdot\text{ns}$** | **15.9x more efficient** |
+| **Flags-Only Fast Path** | **Production** | Zero-allocation | N/A | N/A | **85.3 ns** *(DRAM)* | **17.3 ns** | **120.0M+ QPS** | N/A | **Edge Firewall Mode** |
+| **`V5-Succinct`** *(Shannon Bound)* | **Experimental** *(Non-Prod)* | ~2.8 bytes (E-F) | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** *(DRAM)* | **331.7 ns** | N/A | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
 
 > **Comprehensive Analysis**: For in-depth empirical testbed analysis, cache-line breakdown, and detailed Criterion traces, see [**`docs/BENCHMARKS.md`**](docs/BENCHMARKS.md).
 >
