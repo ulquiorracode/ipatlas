@@ -45,60 +45,58 @@ Drop IPAtlas into your existing stack in **2 lines of code**:
 
 | Environment | Integration | Effort | Status |
 | :--- | :--- | :--- | :--- |
-| **Rust Web / Axum / Tower** | Single middleware layer: `.layer(IpAtlasLayer::new(reader))` | **30 sec** | Production Ready |
-| **MaxMind Migration** | One-command CLI compile: `ipatlas compile --maxmind-blocks ...` | **10 sec** | Production Ready |
+| **Rust / Axum & Tower** | Single middleware layer: `.layer(IpAtlasLayer::new(reader))` | **30 sec** | Production Ready |
+| **Rust / Actix-web** | Transform middleware: `.wrap(IpAtlasMiddleware::new(reader))` | **30 sec** | Production Ready |
+| **MaxMind `maxminddb` Crates** | Drop-in API: `Reader::open_readfile(...)` + `reader.lookup::<CityRecord>(ip)` | **1 min** | Production Ready |
+| **Python** | Pure stdlib `ctypes` (`from ipatlas import IpAtlasDatabase`) | **1 min** | Production Ready |
+| **Go** | Fast `cgo` package (`ipatlas.Open(...)`) | **1 min** | Production Ready |
 | **C / C++ / Nginx / Envoy** | Zero-alloc C ABI: `ipatlas_open("db.bin")` + `ipatlas_is_threat_u32(...)` | **1 min** | Production Ready |
-| **Python / Go / FFI** | Instant `ctypes` / `cgo` wrapper around shared library (`.so` / `.dll`) | **1 min** | Production Ready |
+| **Kubernetes / Docker** | Sidecar microservice with Prometheus telemetry (`ipatlas serve`) | **2 min** | Production Ready |
+| **MaxMind CSV Migration** | One-command CLI compile: `ipatlas compile --maxmind-blocks ...` | **10 sec** | Production Ready |
 
-### 1. Axum / Tower Web Service (Rust)
+### 1. Web Frameworks (Axum & Actix-web)
 ```rust
-use axum::{routing::get, Router, extract::Extension};
-use ipatlas_adapter_tower::{IpAtlasLayer, ClientGeo};
+// Axum:
+app.layer(IpAtlasLayer::new(reader).with_strict_threat_block(true));
 
-let reader = Arc::new(IpAtlasReader::open("ipatlas_goldsrc_city.bin")?);
-
-// 1. Attach layer to router
-let app = Router::new()
-    .route("/api/hello", get(|Extension(geo): Extension<ClientGeo>| async move {
-        format!("Hello from {}, {}!", geo.city, geo.country)
-    }))
-    .layer(IpAtlasLayer::new(reader).with_strict_threat_block(true));
-```
-*Read the full [Web Integration Guide](docs/INTEGRATION_GUIDE.md).*
-
-### 2. MaxMind GeoLite2 One-Command CLI Migration
-Migrate existing MaxMind GeoLite2 City CSV exports to high-speed zero-copy `.bin` with a single command:
-```bash
-ipatlas compile \
-  --maxmind-blocks GeoLite2-City-Blocks-IPv4.csv \
-  --maxmind-locations GeoLite2-City-Locations-en.csv \
-  -o ipatlas.bin
+// Actix-web:
+App::new().wrap(IpAtlasMiddleware::new(reader).with_strict_threat_block(true));
 ```
 
-### 3. C, C++, Nginx & Native Daemons (C-ABI)
-```c
-#include "ipatlas.h"
+### 2. MaxMind `maxminddb` 1-Line Dependency Replacement
+Replace `maxminddb = "0.24"` with IPAtlas in your `Cargo.toml`. Zero code changes required:
+```rust
+use ipatlas_adapter_maxminddb_compat::{Reader, geoip2};
 
-// 1. Open database (zero-allocation mmap)
-IpAtlasHandle* db = ipatlas_open("ipatlas.bin");
-
-// 2. Sub-20ns threat check in edge packet filter
-if (ipatlas_is_threat_u32(db, client_ip_u32)) {
-    drop_packet();
-}
-ipatlas_close(db);
+let reader = Reader::open_readfile("ipatlas.bin")?;
+let city: geoip2::CityRecord = reader.lookup(client_ip)?;
+println!("Country: {:?}, City: {:?}", city.country, city.city);
 ```
 
-### 4. Python via `ctypes` (No Rust toolchain needed)
+### 3. Python (Zero Build Setup, Pure `ctypes`)
 ```python
-import ctypes
+from ipatlas import IpAtlasDatabase
 
-lib = ctypes.CDLL("./libipatlas_adapter_c.so")
-db = lib.ipatlas_open(b"ipatlas_goldsrc_city.bin")
-is_threat = lib.ipatlas_is_threat_u32(db, 0x08080808)
-print("Is Threat:", bool(is_threat))
-lib.ipatlas_close(db)
+with IpAtlasDatabase.open("ipatlas_goldsrc_city.bin") as db:
+    country = db.lookup_country("8.8.8.8")  # "US"
+    is_threat = db.is_threat("8.8.8.8")     # False
 ```
+
+### 4. Go (via `cgo`)
+```go
+import "github.com/ulquiorracode/ipatlas/bindings/go/ipatlas"
+
+db, _ := ipatlas.Open("ipatlas_goldsrc_city.bin")
+defer db.Close()
+country, _ := db.LookupCountry(net.ParseIP("8.8.8.8"))
+```
+
+### 5. Kubernetes Sidecar & Prometheus Telemetry
+Run as an ultra-compact (~15MB RAM) sidecar microservice exposing `/lookup/:ip`, `/healthz`, and `/metrics`:
+```bash
+docker run -p 8080:8080 -v ./dist:/data ipatlas:latest -d /data/ipatlas_goldsrc_city.bin
+```
+*See [Kubernetes deployment manifest](deploy/k8s/ipatlas-sidecar.yaml) and [Proxy Integration Recipes](docs/recipes/PROXIES.md).*
 
 ---
 

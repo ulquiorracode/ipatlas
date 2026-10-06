@@ -25,6 +25,8 @@ pub enum Commands {
     /// Measure lookup throughput and latency
     #[command(name = "bench", alias = "benchmark")]
     Bench(BenchArgs),
+    /// Run lightweight HTTP Sidecar microservice with Prometheus metrics
+    Serve(ServeArgs),
 }
 
 #[derive(Args)]
@@ -122,6 +124,19 @@ pub struct BenchArgs {
     /// Number of lookups to benchmark
     #[arg(short = 'n', long, default_value_t = 100_000)]
     pub count: usize,
+}
+
+#[derive(Args)]
+pub struct ServeArgs {
+    /// Path to .bin database
+    #[arg(short = 'd', long = "database")]
+    pub database: PathBuf,
+    /// Listening TCP port
+    #[arg(short = 'p', long = "port", default_value_t = 8080)]
+    pub port: u16,
+    /// Bind address
+    #[arg(short = 'b', long = "bind", default_value = "0.0.0.0")]
+    pub bind: String,
 }
 
 pub fn format_num<T: std::fmt::Display>(n: T) -> String {

@@ -2,7 +2,9 @@
 members = [
     "core/ipatlas-core",
     "adapters/ipatlas-adapter-tower",
+    "adapters/ipatlas-adapter-actix",
     "adapters/ipatlas-adapter-maxmind",
+    "adapters/ipatlas-adapter-maxminddb-compat",
     "adapters/ipatlas-adapter-c",
     "cli/ipatlas-cli",
 ]

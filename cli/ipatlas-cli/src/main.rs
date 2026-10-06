@@ -6,6 +6,7 @@ use cli::{
     bench::run_bench,
     commands::{run_compile, run_info, run_lookup},
     convert::run_convert,
+    serve::run_serve,
     Cli, Commands,
 };
 
@@ -18,6 +19,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Info(args) => run_info(args)?,
         Commands::Convert(args) => run_convert(args)?,
         Commands::Bench(args) => run_bench(args)?,
+        Commands::Serve(args) => run_serve(args)?,
     }
 
     Ok(())

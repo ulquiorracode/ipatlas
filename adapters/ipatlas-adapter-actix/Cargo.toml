@@ -1,0 +1,18 @@
+[package]
+name = "ipatlas-adapter-actix"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Actix-web middleware adapter for IPAtlas geolocation and threat detection"
+
+[dependencies]
+ipatlas-core.workspace = true
+actix-web = { version = "4.9", default-features = false }
+futures-util = { version = "0.3", default-features = false }
+
+[dev-dependencies]
+actix-web = { version = "4.9", features = ["macros"] }
+tempfile.workspace = true
