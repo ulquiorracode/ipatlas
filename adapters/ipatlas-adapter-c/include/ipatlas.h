@@ -15,9 +15,16 @@ typedef struct IpAtlasHandle IpAtlasHandle;
 
 /**
  * Opens an IPAtlas binary database from a null-terminated file path.
- * Returns NULL if opening or verification fails.
+ * Returns NULL if opening or header verification fails.
  */
 IpAtlasHandle* ipatlas_open(const char* path);
+
+/**
+ * Opens and performs full cryptographically verified checksum & sort checks
+ * on an IPAtlas binary database. Recommended for critical daemon startup.
+ * Returns NULL if verification fails.
+ */
+IpAtlasHandle* ipatlas_open_verified(const char* path);
 
 /**
  * Closes and frees an IPAtlas database handle.
@@ -26,9 +33,10 @@ void ipatlas_close(IpAtlasHandle* handle);
 
 /**
  * Look up raw threat flags bitmask for an IPv4 address (host byte order integer).
- * Returns 0 if not found.
+ * Writes bitflags to flags_out.
+ * Returns 1 if IP is found in the database, 0 otherwise.
  */
-uint32_t ipatlas_lookup_flags_u32(const IpAtlasHandle* handle, uint32_t ip);
+int ipatlas_lookup_flags_u32(const IpAtlasHandle* handle, uint32_t ip, uint32_t* flags_out);
 
 /**
  * Fast threat predicate: returns 1 if known threat (Proxy, VPN, Tor, Botnet, Spam), 0 otherwise.

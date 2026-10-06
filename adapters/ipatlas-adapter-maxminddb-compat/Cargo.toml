@@ -1,0 +1,17 @@
+[package]
+name = "ipatlas-adapter-maxminddb-compat"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MaxMind DB (maxminddb) drop-in compatibility API adapter for IPAtlas"
+
+[dependencies]
+ipatlas-core.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

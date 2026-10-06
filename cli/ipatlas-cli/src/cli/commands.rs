@@ -93,10 +93,6 @@ pub fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
         }
     }
 
-    if geo_v4.is_none() && proxy_v4.is_none() && geo_v6.is_none() && proxy_v6.is_none() {
-        anyhow::bail!("Compilation requires at least one dataset input (--geo, --proxy, --geo-v6, --proxy-v6)");
-    }
-
     let family_label = if opt_config.compact_ranges {
         "Compact (8B V4 / 36B V6)"
     } else {
@@ -106,6 +102,48 @@ pub fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
         StorageLayout::Aos => "AoS (Array of Structures)",
         StorageLayout::Soa => "SoA (Structure of Arrays)",
     };
+
+    let has_maxmind = args.maxmind_blocks.is_some() || args.maxmind_locations.is_some();
+
+    if has_maxmind {
+        let blocks = match &args.maxmind_blocks {
+            Some(b) => b,
+            None => anyhow::bail!("MaxMind compilation requires --maxmind-blocks <CSV>"),
+        };
+        let locations = match &args.maxmind_locations {
+            Some(l) => l,
+            None => anyhow::bail!("MaxMind compilation requires --maxmind-locations <CSV>"),
+        };
+
+        println!("Starting IPAtlas Database Compilation from MaxMind GeoLite2:");
+        println!("  Output Target:     {:?}", args.out);
+        println!("  Blocks CSV:        {:?}", blocks);
+        println!("  Locations CSV:     {:?}", locations);
+        println!("  Family:            {}", family_label);
+        println!("  Layout:            {}", layout_label);
+
+        let adapter = ipatlas_adapter_maxmind::MaxMindCityAdapter::open(blocks, locations)?;
+        let stats = ipatlas_core::compile_adapter(adapter, &args.out, opt_config, feature_mask)?;
+
+        let raw_mb = (stats.raw_size as f64) / (1024.0 * 1024.0);
+        println!(
+            "\nMaxMind Compilation Complete in {:.3}s!",
+            stats.elapsed_secs
+        );
+        println!("  Total Ranges:      {}", format_num(stats.records));
+        println!("  Unique Profiles:   {}", format_num(stats.profiles));
+        println!(
+            "  Output File Size:  {:.2} MB ({} bytes)",
+            raw_mb,
+            format_num(stats.raw_size)
+        );
+        println!("  Database CRC32:    0x{:08X}", stats.crc32);
+        return Ok(());
+    }
+
+    if geo_v4.is_none() && proxy_v4.is_none() && geo_v6.is_none() && proxy_v6.is_none() {
+        anyhow::bail!("Compilation requires at least one dataset input (--geo, --proxy, --maxmind-blocks/locations)");
+    }
 
     println!("Starting IPAtlas Database Compilation:");
     println!("  Output Target: {:?}", args.out);

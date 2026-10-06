@@ -25,6 +25,8 @@ pub enum Commands {
     /// Measure lookup throughput and latency
     #[command(name = "bench", alias = "benchmark")]
     Bench(BenchArgs),
+    /// Run lightweight HTTP Sidecar microservice with Prometheus metrics
+    Serve(ServeArgs),
 }
 
 #[derive(Args)]
@@ -68,6 +70,14 @@ pub struct CompileArgs {
     /// Path to IPv6 IP2Proxy CSV (e.g. IP2PROXY-LITE-PX10.IPV6.CSV)
     #[arg(long, aliases = ["px-v6", "proxy-v6"])]
     pub proxy_v6: Option<PathBuf>,
+
+    /// Path to MaxMind GeoLite2 City/Country Blocks CSV (e.g. GeoLite2-City-Blocks-IPv4.csv)
+    #[arg(long = "maxmind-blocks", alias = "mm-blocks")]
+    pub maxmind_blocks: Option<PathBuf>,
+
+    /// Path to MaxMind GeoLite2 Locations CSV (e.g. GeoLite2-City-Locations-en.csv)
+    #[arg(long = "maxmind-locations", alias = "mm-locations")]
+    pub maxmind_locations: Option<PathBuf>,
 
     /// Output binary path (.bin)
     #[arg(short = 'o', long = "out")]
@@ -114,6 +124,19 @@ pub struct BenchArgs {
     /// Number of lookups to benchmark
     #[arg(short = 'n', long, default_value_t = 100_000)]
     pub count: usize,
+}
+
+#[derive(Args)]
+pub struct ServeArgs {
+    /// Path to .bin database
+    #[arg(short = 'd', long = "database")]
+    pub database: PathBuf,
+    /// Listening TCP port
+    #[arg(short = 'p', long = "port", default_value_t = 8080)]
+    pub port: u16,
+    /// Bind address
+    #[arg(short = 'b', long = "bind", default_value = "0.0.0.0")]
+    pub bind: String,
 }
 
 pub fn format_num<T: std::fmt::Display>(n: T) -> String {

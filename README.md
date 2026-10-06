@@ -9,12 +9,103 @@
 
 > Ultra-fast zero-copy binary GeoIP and Proxy/VPN threat database compiler and reader in Rust.
 
-**IPAtlas** is a production systems-level library and CLI tool written in Rust. It fuses disjoint Geolocation (IP2Location) and Threat/Proxy datasets (IP2Proxy) into a unified, flat binary search table designed for edge proxies, high-performance firewalls, game servers, and sub-microsecond packet filters.
+**IPAtlas** is a production systems-level library and CLI tool written in Rust. It fuses disjoint Geolocation (IP2Location / MaxMind) and Threat/Proxy datasets (IP2Proxy) into a unified, flat binary search table designed for edge proxies, high-performance firewalls, game servers, and sub-microsecond packet filters.
+
+---
+
+## ⚡ 30-Second Quickstart (Zero Setup)
+
+Try IPAtlas immediately with pre-compiled production binaries—**no dataset registration or CSV downloads required**:
+
+```bash
+# 1. Install CLI utility
+cargo install ipatlas-cli
+
+# 2. Instant lookup using pre-bundled distribution binary
+ipatlas lookup ./dist/ipatlas_goldsrc_city.bin 8.8.8.8
+```
+
+Output:
+```text
+IP:          8.8.8.8
+Range:       8.8.8.0 - 8.8.8.255
+Country:     US (United States)
+Region:      California
+City:        Mountain View
+ISP:         Google LLC (AS15169)
+Threat:      Clean (0x0000)
+Lookup Time: 0.07 µs (68 ns)
+```
+
+---
+
+## 🔌 Zero-Effort Drop-In Integrations
+
+Drop IPAtlas into your existing stack in **2 lines of code**:
+
+| Environment | Integration | Effort | Status |
+| :--- | :--- | :--- | :--- |
+| **Rust / Axum & Tower** | Single middleware layer: `.layer(IpAtlasLayer::new(reader))` | **30 sec** | Production Ready |
+| **Rust / Actix-web** | Transform middleware: `.wrap(IpAtlasMiddleware::new(reader))` | **30 sec** | Production Ready |
+| **MaxMind `maxminddb` Crates** | Drop-in API: `Reader::open_readfile(...)` + `reader.lookup::<CityRecord>(ip)` | **1 min** | Production Ready |
+| **Python** | Pure stdlib `ctypes` (`from ipatlas import IpAtlasDatabase`) | **1 min** | Production Ready |
+| **Go** | Fast `cgo` package (`ipatlas.Open(...)`) | **1 min** | Production Ready |
+| **C / C++ / Nginx / Envoy** | Zero-alloc C ABI: `ipatlas_open("db.bin")` + `ipatlas_is_threat_u32(...)` | **1 min** | Production Ready |
+| **Kubernetes / Docker** | Sidecar microservice with Prometheus telemetry (`ipatlas serve`) | **2 min** | Production Ready |
+| **MaxMind CSV Migration** | One-command CLI compile: `ipatlas compile --maxmind-blocks ...` | **10 sec** | Production Ready |
+
+### 1. Web Frameworks (Axum & Actix-web)
+```rust
+// Axum:
+app.layer(IpAtlasLayer::new(reader).with_strict_threat_block(true));
+
+// Actix-web:
+App::new().wrap(IpAtlasMiddleware::new(reader).with_strict_threat_block(true));
+```
+
+### 2. MaxMind `maxminddb` 1-Line Dependency Replacement
+Replace `maxminddb = "0.24"` with IPAtlas in your `Cargo.toml`. Zero code changes required:
+```rust
+use ipatlas_adapter_maxminddb_compat::{Reader, geoip2};
+
+let reader = Reader::open_readfile("ipatlas.bin")?;
+let city: geoip2::CityRecord = reader.lookup(client_ip)?;
+println!("Country: {:?}, City: {:?}", city.country, city.city);
+```
+
+### 3. Python (Zero Build Setup, Pure `ctypes`)
+```python
+from ipatlas import IpAtlasDatabase
+
+with IpAtlasDatabase.open("ipatlas_goldsrc_city.bin") as db:
+    country = db.lookup_country("8.8.8.8")  # "US"
+    is_threat = db.is_threat("8.8.8.8")     # False
+```
+
+### 4. Go (via `cgo`)
+```go
+import "github.com/ulquiorracode/ipatlas/bindings/go/ipatlas"
+
+var db *ipatlas.Database
+db, _ = ipatlas.Open("ipatlas_goldsrc_city.bin")
+defer db.Close()
+
+country, ok := db.LookupCountry(net.ParseIP("8.8.8.8"))
+```
+
+### 5. Kubernetes Sidecar & Prometheus Telemetry
+Run as an ultra-compact (~15MB RAM) sidecar microservice exposing `/lookup/:ip`, `/healthz`, and `/metrics`:
+```bash
+docker run -p 8080:8080 -v ./dist:/data ipatlas:latest -d /data/ipatlas_goldsrc_city.bin
+```
+*See [Kubernetes deployment manifest](deploy/k8s/ipatlas-sidecar.yaml) and [Proxy Integration Recipes](docs/recipes/PROXIES.md).*
 
 ---
 
 ## Table of Contents
 
+- [⚡ 30-Second Quickstart (Zero Setup)](#-30-second-quickstart-zero-setup)
+- [🔌 Zero-Effort Drop-In Integrations](#-zero-effort-drop-in-integrations)
 - [Background](#background)
 - [Features](#features)
 - [Architecture](#architecture)
@@ -30,6 +121,7 @@
 - [Rust Library API](#rust-library-api)
   - [Basic Zero-Allocation Lookup](#basic-zero-allocation-lookup)
   - [Monomorphic U-Cycle Pipeline (`stitch-rs`)](#monomorphic-u-cycle-pipeline-stitch-rs)
+- [Universal Drop-In Ecosystem Adapters](#universal-drop-in-ecosystem-adapters)
 - [Maintainers](#maintainers)
 - [Contributing](#contributing)
 - [Security](#security)

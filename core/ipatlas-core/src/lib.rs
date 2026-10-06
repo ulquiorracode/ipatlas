@@ -28,6 +28,6 @@ pub use reader::{HeaderVariant, IpAtlasReader, ReaderError};
 
 #[cfg(feature = "compiler")]
 pub use compiler::{
-    compile, CompilationStats, CompilerError, CompilerOptions, DatasetIngestionAdapter,
-    IngestRecordV4, IngestRecordV6,
+    compile, compile_adapter, CompilationStats, CompilerError, CompilerOptions,
+    DatasetIngestionAdapter, IngestRecordV4, IngestRecordV6,
 };

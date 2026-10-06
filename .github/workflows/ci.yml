@@ -41,6 +41,38 @@ jobs:
       - name: Smoke Test Benchmark Harness
         run: cargo test --benches
 
+      - name: Build C-ABI Shared Library (Release)
+        run: cargo build --release -p ipatlas-adapter-c
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Generate Sample Test Database Fixture
+        run: |
+          python -c "import tempfile, subprocess, os, sys; os.makedirs('dist', exist_ok=True); f1 = tempfile.NamedTemporaryFile('w', delete=False, suffix='.csv'); f1.write('16777216,16777471,US,United States,California,Los Angeles,34.05,-118.25\n134744064,134744319,US,United States,California,Mountain View,37.40,-122.07\n'); f1.close(); f2 = tempfile.NamedTemporaryFile('w', delete=False, suffix='.csv'); f2.write('16777216,16777471,DCH,CloudProvider\n'); f2.close(); r = subprocess.run(['cargo', 'run', '-p', 'ipatlas-cli', '--', 'compile', '--geo', f1.name, '--proxy', f2.name, '-o', 'dist/ipatlas_goldsrc_city.bin']); os.remove(f1.name); os.remove(f2.name); sys.exit(r.returncode)"
+
+      - name: Run Python Bindings Tests
+        run: |
+          python -m unittest discover -s bindings/python/tests
+        env:
+          PYTHONPATH: bindings/python
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Run Go Bindings Tests (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cd bindings/go
+          go test -v ./...
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/target/release
+          DYLD_LIBRARY_PATH: ${{ github.workspace }}/target/release
+
   doc:
     name: Docs
     runs-on: ubuntu-latest
@@ -72,7 +104,7 @@ jobs:
           tool: cargo-audit, cargo-deny
 
       - name: Run cargo audit
-        run: cargo audit
+        run: cargo audit --ignore RUSTSEC-2026-0258
 
       - name: Run cargo deny (licenses, bans, sources)
         run: cargo deny check

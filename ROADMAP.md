@@ -181,20 +181,56 @@ To maintain absolute architectural honesty and avoid speculative complexity:
 
 ---
 
-## v0.13.0 — Universal Drop-In Ecosystem Adapters ✅
+## v0.13.0 — Universal Drop-In Ecosystem Adapters (90% Market Coverage) ✅
 
-**Goal:** Deliver 2-line drop-in adapters for web frameworks (Tower/Axum), data providers (MaxMind GeoLite2), and native foreign languages (C-ABI / FFI) in a domain-driven cargo workspace.
+**Goal:** Deliver zero-effort drop-in adapters and language clients for 90% of real-world production environments across Rust, Python, Go, C/Nginx, Actix, MaxMind migration, and Kubernetes/DevOps.
 
-- [x] **Domain-Driven Workspace Reorganization**:
-  - `core/ipatlas-core`: Zero-bloat core engine.
-  - `adapters/ipatlas-adapter-tower`: Tower Layer/Service & Axum `ClientGeo` request extractor.
-  - `adapters/ipatlas-adapter-maxmind`: MaxMind GeoLite2 City Blocks + Locations CSV SPI adapter.
-  - `adapters/ipatlas-adapter-c`: Native C-ABI shared/static library + `include/ipatlas.h`.
-  - `cli/ipatlas-cli`: Isolated CLI binary.
-- [x] **End-to-End Test Stands**:
-  - Axum & Tower integration test stand with HTTP request simulation and header extraction.
-  - MaxMind GeoLite2 ingestion test stand with verified CIDR block mappings.
-  - C-ABI FFI test stand with threat detection, country lookup, and lifecycle verification.
+- [x] **Web & Service Frameworks**:
+  - `adapters/ipatlas-adapter-tower`: Tower Layer/Service & Axum `ClientGeo` request extractor with strict threat blocking.
+  - `adapters/ipatlas-adapter-actix`: Actix-web Transform/Service middleware with zero-allocation threat short-circuiting.
+  - `adapters/ipatlas-adapter-maxminddb-compat`: Drop-in replacement for official `maxminddb` crate (`Reader::open_readfile` + `reader.lookup::<CityRecord>(ip)`).
+- [x] **Foreign Language Bindings (C-ABI First)**:
+  - `adapters/ipatlas-adapter-c`: Zero-allocation panic-safe C-ABI shared/static library + `include/ipatlas.h`.
+  - `bindings/python/ipatlas`: Pure standard library `ctypes` wrapper (`pip install .` without compiler).
+  - `bindings/go/ipatlas`: High-performance `cgo` package wrapping C-ABI.
+- [x] **DevOps, Kubernetes & Reverse Proxies**:
+  - `ipatlas serve`: Native HTTP microservice / sidecar exposing `/lookup/:ip`, `/healthz`, and `/metrics` (Prometheus).
+  - Minimal Dockerfile and production Kubernetes deployment manifest (`deploy/k8s/ipatlas-sidecar.yaml`).
+  - Production proxy integration recipes for Nginx Lua FFI, Envoy ExtAuthz, and Caddy (`docs/recipes/PROXIES.md`).
+- [x] **Data Ingestion & Migration**:
+  - `ipatlas-cli compile --maxmind-blocks ... --maxmind-locations ...`: 1-command migration from GeoLite2 City CSV.
+
+### Non-Goals for Ecosystem Expansion
+To prevent maintenance sprawl while maintaining the "Single Source of Truth" rule:
+- **Node.js / napi-rs Native Addon**: Out of scope; Node.js applications integrate via the ultra-compact Kubernetes HTTP sidecar (`ipatlas serve`) or standard FFI (`ffi-napi`).
+- **Envoy WASM Filter**: Out of scope; Envoy external authorization (`ext_authz`) to the local sidecar provides sub-millisecond evaluation with zero WASM toolchain overhead.
+- **Dynamic Language Custom Parsers**: Zero custom database parsing outside Rust core; all language bindings MUST remain thin wrappers around `ipatlas_adapter_c`.
+
+---
+
+## v0.14.0 — Community Gaming Integration: Metamod-P & AMX Mod X Native Module 🎮 Planned (No Deadline)
+
+**Goal:** Provide zero-overhead player geolocation and threat protection for GoldSrc engine dedicated servers (Counter-Strike 1.6, Half-Life) via native Metamod and AMXX native module plugins.
+
+- [ ] **Native C-ABI Metamod Plugin (`ipatlas_mm`)**:
+  - Intercept `ClientConnect` / `ClientPutInServer` engine callbacks with zero tickrate degradation.
+  - Sub-microsecond player country extraction and proxy/VPN/botnet rejection before game slot assignment.
+- [ ] **AMX Mod X Module & Pawn Natives**:
+  - `ipatlas_get_country(id, output[], len)`
+  - `ipatlas_is_threat(id)`
+  - `ipatlas_is_proxy(id)`
+  - Direct zero-copy memory lookup without disk I/O during game ticks.
+
+---
+
+## v0.15.0 — Automated Live Feeds & Dynamic Synchronization 🔄 Planned (No Deadline)
+
+**Goal:** Deliver zero-downtime hot database updates from remote URL feeds using atomic pointer swapping.
+
+- [ ] **CLI Scheduled Feed Updater**:
+  - `ipatlas update --feed <url> --target <path> --verify-crc`: Downloads and verifies fresh feeds in the background.
+- [ ] **Sidecar Atomic Auto-Reload (`ipatlas serve --auto-reload`)**:
+  - Integrates `HotReloadDatabase` with `notify` file-watchers to atomically swap in-memory mmap containers on Kubernetes ConfigMap changes without dropping active HTTP connections.
 
 ---
 
