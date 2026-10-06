@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Implemented safe, unaligned copy accessors (ip_from(), ip_to(), profile_id()) using ddr_of!(...).read_unaligned() on #[repr(C, packed)] struct Ipv6Range.
   - Completely eliminated unaligned pointer reference warnings and potential UB during binary search and bounds checks in mmap_reader.rs.
 - **IPv4-Mapped IPv6 Lookup Ordering**:
-  - Hot-path optimization in lookup_addr: check ::ffff:0:0/96 prefix via 	o_ipv4_mapped() first, avoiding ~23 cold binary search misses across the IPv6 table for IPv4-mapped addresses.
+  - Hot-path optimization in lookup_addr: check ::ffff:0:0/96 prefix via  o_ipv4_mapped() first, avoiding ~23 cold binary search misses across the IPv6 table for IPv4-mapped addresses.
 - **Truth-in-Benchmarking & Metric Clarity**:
   - Re-labeled multi-threaded batch throughput in CLI benchmarks (src/cli/bench.rs) to explicit Throughput-Eq (ns/query) to avoid conflating aggregate throughput (/\text{QPS}$) with single-query latency.
   - Separated true interval hit-path benchmarking from miss-path testing in Criterion suites (enches/lookup_bench.rs).

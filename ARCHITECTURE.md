@@ -125,21 +125,25 @@ src/
 ## 4. Core Architectural Invariants
 
 ### 1. Zero-Copy Kernel Memory Mapping
+
 - Slices of interval records (`[Ipv4Range]`, `[Ipv4RangeCompact]`, `[Ipv6Range]`, `[Ipv6RangeSplit64]`) are mapped directly from the operating system's page cache using `memmap2`.
 - Memory representations derive `zerocopy` traits (`FromBytes`, `IntoBytes`, `Immutable`, `KnownLayout`). Zero heap allocations occur on the query hot path.
 - All range tables and profile dictionaries are naturally aligned, preventing unaligned hardware traps across x86_64, aarch64, and wasm32.
 
 ### 2. 1D Sweep-Line Interval Partitioning
+
 - Both IPv4 ($[0, 2^{32}-1]$) and IPv6 ($[0, 2^{128}-1]$) address spaces are represented as non-overlapping, contiguous intervals.
 - The compiler streams IP2Location and IP2Proxy inputs simultaneously with two cursors in $O(N + M)$ time and $O(1)$ intermediate RAM.
 - Overlapping geo and threat intervals are sliced at boundaries, establishing uniform profile IDs for every sub-range without data loss.
 
 ### 3. Profile Deduplication & Integer Normalization
+
 - Repeated metadata tuples resolve to an identical 32-bit `profile_id`.
 - The profile table stores compact indices into a contiguous null-terminated UTF-8 string blob.
 - String resolution is strictly lazy: country codes and threat flags are extracted directly from the profile without string lookups.
 
 ### 4. Cache-Aligned Storage Tiers
+
 1. **`Ipv4Range` (12 bytes/interval)**: `from: u32, to: u32, profile_id: u32`. Universal 32-bit profile index capacity.
 2. **`Ipv4RangeCompact` (8 bytes/interval)**: `from: u32, count: u16, profile_id: u16`. Aligns exactly 8 records per 64-byte CPU cache line (-32.4% RAM).
 3. **`Ipv6RangeSplit64` (16 bytes/interval)**: `from_hi: u64, count_hi: u32, profile_id: u32`. Truncates lower 64 bits to eliminate cache-line straddling (4 records per 64B cache line, -55.6% RAM).
@@ -147,6 +151,7 @@ src/
 5. **`SuccinctIntervalTable` (Elias-Fano)**: Monotone prefix bitvector encoding reaching ~100% of the Shannon entropy floor (~17.8 MB active RAM).
 
 ### 5. Monomorphic U-Cycle Pipeline (`stitch-rs`)
+
 - High-level queries execute through a compile-time monomorphic state machine (`stitch-rs`).
 - **Descent Phase**: Bogon and private network ranges (RFC 1918, Loopback) short-circuit in $\approx 1.5\text{ ns}$ without touching disk or DRAM.
 - **Ascent Phase**: Threat policies (rejecting proxies, datacenter IPs, or malicious ASNs) execute before returning outcomes to the caller.

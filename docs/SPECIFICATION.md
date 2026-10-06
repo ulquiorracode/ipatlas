@@ -15,8 +15,9 @@ All IPAtlas binary artifacts start with a 32-byte or 64-byte aligned header.
 ---
 
 ## 2. Orthogonal 3D Format Matrix & Layout Tiers
- 
+
 IPAtlas structures its physical database containers across three orthogonal dimensions:
+
 - **Generation**: `V4` (legacy/IPv4-focused, 64-byte header) vs `V5` (dual-stack IPv4+IPv6, 80-byte header).
 - **Family**: `Standard` (12B per range, 32-bit profile index) vs `Compact` (8B per range, 16-bit count + profile index) vs `Succinct` (Elias-Fano bitvector).
 - **Layout**: `AoS` (Array of Structures: interleaved range records) vs `SoA` (Structure of Arrays: decoupled columnar slices).
@@ -50,6 +51,7 @@ IPAtlas structures its physical database containers across three orthogonal dime
 ### 2.1 Benchmark Testbed & Reproduction Conditions
 
 To ensure strict scientific reproducibility and eliminate unsubstantiated marketing figures:
+
 - **Processor**: Intel Core i7 / AMD Ryzen 9 class x86_64 host (3.60 GHz base, AVX2 enabled, 32KB L1d cache, 512KB L2 cache per core).
 - **Operating System**: Windows 11 Pro / Ubuntu 22.04 LTS kernel 6.5.
 - **Harness & Profiler**: Criterion.rs 0.5.1 with 1,000,000 warm-up samples, 1024 pseudo-random queries to defeat branch prediction (`benches/lookup_bench.rs`).
@@ -81,6 +83,7 @@ Universal layout for unconstrained profile counts ($> 65{,}535$).
 ## 4. Tier 2: Compact Formats (IPv4 & IPv6 Split-64)
 
 ### 4.1 IPv4 Compact (8 Bytes)
+
 Engineered for CPU cache line density (8 intervals per 64-byte cache line).
 
 ```text
@@ -97,6 +100,7 @@ Engineered for CPU cache line density (8 intervals per 64-byte cache line).
 - **Automatic Fallback**: If unique profile count exceeds `u16::MAX` (65,535), compiler safely upgrades to `Standard` (12B).
 
 ### 4.2 IPv6 Split-64 Compact (`Ipv6RangeSplit64`, 16 Bytes)
+
 Engineered to eliminate cache-line straddling and shrink 128-bit IPv6 intervals from 36 bytes down to 16 bytes:
 
 ```text
@@ -145,9 +149,10 @@ The global IPv4 table contains $N \approx 5.3 \times 10^6$ disjoint intervals in
 
 ### 5.3 Incompressibility Invariant of Succinct Streams
 
-Because the Elias-Fano representation already compresses the interval boundaries down to maximal theoretical entropy ($H \approx 1.0\text{ bit/bit}$), the lower-bits bitstream is statistically indistinguishable from uniform white noise. 
+Because the Elias-Fano representation already compresses the interval boundaries down to maximal theoretical entropy ($H \approx 1.0\text{ bit/bit}$), the lower-bits bitstream is statistically indistinguishable from uniform white noise.
 
 Applying dictionary or statistical block compressors (Zstandard, Deflate/Gzip) on top of raw `V5-Succinct` binaries yields a negligible reduction of only **3–7%** while introducing decompression CPU latency and heap overhead. Consequently:
+
 - **`V5-Succinct` data MUST be deployed and served strictly as raw binary images**.
 - External or embedded compression layers are architectural anti-patterns when paired with Succinct encodings.
 

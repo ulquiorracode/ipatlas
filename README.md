@@ -124,6 +124,7 @@ IPAtlas provides distinct layout tiers designed around the trade-off between mem
 > **Comprehensive Analysis**: For in-depth empirical testbed analysis, cache-line breakdown, and detailed Criterion traces, see [**`docs/BENCHMARKS.md`**](docs/BENCHMARKS.md).
 >
 > **Methodology & L1 Cache-Fit vs DRAM Reality**:
+>
 > - **5.3M Full Snapshot**: Lookups across the complete 5,318,878 production database (41–61 MB). At this scale, the 21.3 MB search key column exceeds the CPU L1/L2 cache and memory bus round-trips ($t_{\text{CAS}}$) bound binary search latency (~193–205 ns single-threaded). SoA yields a steady ~6% single-threaded improvement and scales to **64.5M QPS** across 16 threads.
 > - **10k L1-Fit Synthetic Regime**: In microbenchmarks where the entire range table fits within 32 KB L1d / L2 cache, binary search achieves **15.4–17.0 ns** without touching DRAM.
 > - **Flags-Only & Threat Predicates**: Bypasses string table resolution and heap allocation entirely, delivering **85.3 ns on 5.3M DRAM** and **16.1–16.9 ns in L1 cache**.

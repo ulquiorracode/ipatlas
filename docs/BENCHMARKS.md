@@ -66,7 +66,7 @@ cargo run --release -- bench dist/ipatlas_goldsrc_firewall_soa.bin -n 1000000
 
 Measured with Criterion.rs (10,000 intervals, hot-cache evaluation):
 
-| Benchmark Name | Sample Size | Latency ({\text{avg}}$) | Description |
+| Benchmark Name | Sample Size | Latency ($T_{\text{avg}}$) | Description |
 | :--- | :--- | :--- | :--- |
 | lookup/hot_l1_lookup_u32 | 100 samples | **69.23 ns** | Repeated hit on identical hot range within L1d |
 | lookup/random_hit_lookup_u32 | 100 samples | **84.37 ns** | Non-cached interval hit (binary search + profile resolution) |
@@ -103,7 +103,8 @@ Evaluation of decompression latency across chunk boundaries for blocked containe
 
 ## 6. Architectural Analysis: AoS vs SoA in Practice
 
-### Why SoA shows 4.6x in synthetic benchmarks but converges on 5.3M:
+### Why SoA shows 4.6x in synthetic benchmarks but converges on 5.3M
+
 1. **Cache-line capacity**:
    - In 64 bytes of cache line, AoS fits $64 / 8 = 8$ records (`ip_from`, `count`, `profile_id`).
    - In SoA, the `ip_from` array fits $64 / 4 = 16$ keys.
@@ -117,9 +118,11 @@ Evaluation of decompression latency across chunk boundaries for blocked containe
 ---
 
 ## 7. IPv6 (128-bit) Dual-Stack Performance & Split-64 Truncation Analysis
- 
- ### The 36-Byte Struct Impedance:
+
+### The 36-Byte Struct Impedance
+
  In the Generation V5 Dual-Stack format, standard IPv6 ranges are represented by `Ipv6Range`:
+
  ```rust
  #[repr(C, packed)]
  pub struct Ipv6Range {
@@ -128,15 +131,18 @@ Evaluation of decompression latency across chunk boundaries for blocked containe
      pub profile_id: u32,    // 4 bytes
  }                           // Total = 36 bytes
  ```
- 
- ### Empirical Observations & Hardware Bottleneck:
+
+### Empirical Observations & Hardware Bottleneck
+
  1. **Cache Line Misalignment**:
     - A standard CPU cache line is 64 bytes. Since $\text{gcd}(36, 64) = 4 \neq 36$, contiguous 36-byte records do not align with 64-byte hardware boundaries.
     - Specifically, index 0 occupies bytes `[0..36]`, index 1 occupies bytes `[36..72]` (straddling lines 0 and 1), and index 2 occupies bytes `[72..108]`.
     - **Result**: Exactly **50% of all lookups** in an AoS `Ipv6Range` array cross a cache line boundary, forcing the hardware memory controller to issue **two L1/L2 cache accesses** per binary search partition step.
- 
- ### IPv6 Split-64 Compact Truncation (`Ipv6RangeSplit64`):
+
+### IPv6 Split-64 Compact Truncation (`Ipv6RangeSplit64`)
+
  In `v0.10.0`, IPAtlas introduces the **Split-64 Truncation** scheme:
+
  ```rust
  #[repr(C, packed)]
  pub struct Ipv6RangeSplit64 {
@@ -145,17 +151,16 @@ Evaluation of decompression latency across chunk boundaries for blocked containe
      pub profile_id: u32,    // 4 bytes
  }                           // Total = 16 bytes
  ```
- 
- - **Zero Cache-Line Straddling**: $\gcd(16, 64) = 16$. Exactly **4 records per 64-byte cache line** without crossing line boundaries.
- - **Memory Reduction**: Shrinks table size from $36 \times N$ to $16 \times N$ bytes (**-55.6% RAM** / 2.25x compression factor).
- - **Measured Criterion Latencies (10,000 intervals, Intel Core i9-11900H)**:
-   - `ipv6_standard_lookup_u128` (36B, standard lossless): **64.96 ns**
-   - `ipv6_split64_compact_lookup_u128` (16B, compact lossy): **80.40 ns** (bounds shifting overhead)
-   - `ipv6_flags_lookup_u128` (36B, flags only): **12.99 ns** (~76.9M QPS)
-   - `ipv6_profile_lookup_u128` (36B, profile direct): **12.47 ns** (~80.1M QPS)
-   - `ipv6_split64_flags_lookup_u128` (16B, flags only): **16.92 ns** (~59.1M QPS)
-   - `ipv6_split64_profile_lookup_u128` (16B, profile direct): **17.09 ns** (~58.5M QPS)
-   - `eytzinger_branchless_lookup_v6_u64` (16B BFS array with prefetch): **15.64 ns** (~63.9M QPS)
- 
- On large datasets exceeding CPU cache (DRAM-bound regime), the 55.6% memory reduction directly translates into fewer DRAM page misses and significantly lower memory bus contention in multi-threaded query engines.
 
+- **Zero Cache-Line Straddling**: $\gcd(16, 64) = 16$. Exactly **4 records per 64-byte cache line** without crossing line boundaries.
+- **Memory Reduction**: Shrinks table size from $36 \times N$ to $16 \times N$ bytes (**-55.6% RAM** / 2.25x compression factor).
+- **Measured Criterion Latencies (10,000 intervals, Intel Core i9-11900H)**:
+  - `ipv6_standard_lookup_u128` (36B, standard lossless): **64.96 ns**
+  - `ipv6_split64_compact_lookup_u128` (16B, compact lossy): **80.40 ns** (bounds shifting overhead)
+  - `ipv6_flags_lookup_u128` (36B, flags only): **12.99 ns** (~76.9M QPS)
+  - `ipv6_profile_lookup_u128` (36B, profile direct): **12.47 ns** (~80.1M QPS)
+  - `ipv6_split64_flags_lookup_u128` (16B, flags only): **16.92 ns** (~59.1M QPS)
+  - `ipv6_split64_profile_lookup_u128` (16B, profile direct): **17.09 ns** (~58.5M QPS)
+  - `eytzinger_branchless_lookup_v6_u64` (16B BFS array with prefetch): **15.64 ns** (~63.9M QPS)
+
+ On large datasets exceeding CPU cache (DRAM-bound regime), the 55.6% memory reduction directly translates into fewer DRAM page misses and significantly lower memory bus contention in multi-threaded query engines.
