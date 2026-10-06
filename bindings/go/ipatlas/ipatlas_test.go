@@ -12,8 +12,7 @@ func TestGoBinding(t *testing.T) {
 	var err error
 	db, err = ipatlas.Open("../../../dist/ipatlas_goldsrc_city.bin")
 	if err != nil {
-		t.Skip("Sample database not found, skipping Go test")
-		return
+		t.Fatalf("Required sample database failed to open: %v", err)
 	}
 	defer db.Close()
 

@@ -9,7 +9,7 @@ class TestIpAtlasPython(unittest.TestCase):
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
         cls.db_path = os.path.join(repo_root, "dist", "ipatlas_goldsrc_city.bin")
         if not os.path.exists(cls.db_path):
-            raise unittest.SkipTest(f"Sample DB not found at: {cls.db_path}")
+            raise AssertionError(f"Required test database fixture not found at: {cls.db_path}")
 
     def test_open_and_lookup_country(self):
         with IpAtlasDatabase.open(self.db_path) as db:

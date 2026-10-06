@@ -41,6 +41,31 @@ jobs:
       - name: Smoke Test Benchmark Harness
         run: cargo test --benches
 
+      - name: Build C-ABI Shared Library (Release)
+        run: cargo build --release -p ipatlas-adapter-c
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run Python Bindings Tests
+        run: |
+          python -m unittest discover -s bindings/python/tests
+        env:
+          PYTHONPATH: bindings/python
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Run Go Bindings Tests (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cd bindings/go
+          go test -v ./...
+
   doc:
     name: Docs
     runs-on: ubuntu-latest
