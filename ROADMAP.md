@@ -114,23 +114,52 @@
 
 **Goal:** Eliminate 128-bit cache-line straddling, compress IPv6 entries down to 16 bytes, and introduce branchless Eytzinger array search.
 
-- [ ] **IPv6 Split-64 Range Truncation**:
-  - Truncate IPv6 search keys to upper 64 bits (`u64`), shrinking packed records from 36B to 16B (4 entries per 64B cache line).
-  - Sub-/64 micro-exception table for granular edge allocations.
-- [ ] **Branchless Eytzinger Search (BFS Array)**:
-  - Cache-friendly array layout with `_mm_prefetch` for predictable latency and elimination of branch mispredictions.
-- [ ] **Empirical Verification**:
-  - Benchmark Split-64 vs naive 128-bit intervals on dual-stack production feeds.
+- [x] **IPv6 Split-64 Range Truncation**:
+  - Truncate IPv6 search keys to upper 64 bits (`u64`), shrinking packed records from 36B to 16B (`Ipv6RangeSplit64`, 4 entries per 64B cache line, zero straddling).
+- [x] **Branchless Eytzinger Search (BFS Array)**:
+  - Cache-friendly array layout with `_mm_prefetch` for predictable latency and elimination of branch mispredictions (13.5 ns IPv4 / 16.3 ns IPv6).
+- [x] **Taxonomy & Architecture Formalization**:
+  - Strict decoupling of container generations (`Gen4`, `Gen5`) from IP protocols (`Ipv4`, `Ipv6`).
+  - Elimination of legacy aliases in favour of explicit domain types.
+- [x] **Comprehensive Pre-Release Documentation Suite**:
+  - Author `docs/INTEGRATION_GUIDE.md` covering web framework middlewares (Actix, Axum, Tower), zero-downtime hot-reloading, and preset sizing recipes.
+- [x] **Empirical Verification on Dual-Stack Benchmark Testbed**:
+  - Benchmarked Split-64 vs uncompressed 36-byte intervals on Criterion testbed (64.96 ns standard vs 80.40 ns compact full record, 12.47 ns standard vs 17.09 ns compact direct profile lookup).
+  - Validated branchless Eytzinger BFS layout for IPv6 at 15.64 ns.
 
 ---
 
-## v0.11.0 — Ecosystem Drop-In Integrations & Fuzz-Proof Validation 📝 Planned
+## v0.11.0 — Hardening, Truth-in-Benchmarking & Core Hygiene 🚧 In Progress
+
+**Goal:** Eliminate all adversarial review findings, achieve absolute truth-in-benchmarking, ensure 100% memory soundness, and streamline core search implementations.
+
+- [ ] **Truth-in-Benchmarking & Metric Clarity**:
+  - Unambiguously separate L1-cache fit (10k) and Production DRAM (5.3M) in all documentation and benchmark tables.
+  - Explicitly label multi-threaded metrics as `throughput-equivalent (16T)` to avoid conflation with single-query latency.
+  - Fix benchmark miss-bias by testing hit-paths using real IP keys sampled from dataset intervals alongside miss-paths.
+  - Clarify Eytzinger BFS and Succinct Elias-Fano as experimental research evaluation benchmarks (not on-disk default).
+- [ ] **Core Search Consolidation (Subtract-Before-You-Add)**:
+  - Collapse 4x duplicated binary search `match TableDispatch` into unified `lookup_raw_v4(ip: u32) -> Option<usize>` helper.
+- [ ] **Memory Soundness & Undefined Behavior Elimination**:
+  - Replace unaligned field accesses in `Ipv6Range` (36B `repr(C, packed)`) with safe `read_unaligned` / struct copying.
+- [ ] **Error Propagation & Silent Corruption Guards**:
+  - Distinguish genuine cache/interval misses (`None`) from internal database corruption errors (OOB profile/string indices).
+- [ ] **Pipeline Optimization (`stitch-rs`)**:
+  - Eliminate `Instant::now()` and heap allocations (`String`) on high-throughput bogon evaluation paths.
+- [ ] **Lossy Split-64 Accuracy Disclaimer**:
+  - Enforce explicit opt-in contract and add precision notice for sub-`/64` over-approximation.
+
+---
+
+## v0.12.0 — Ecosystem Drop-In Integrations & Generic Ingestion 📝 Planned
 
 **Goal:** Turn IPAtlas into an effortless drop-in middleware for Rust web frameworks and harden mmap parsing against malicious corruption.
 
 - [ ] **Web Framework Middlewares**:
   - `ipatlas-tower` / `ipatlas-axum` crate providing plug-and-play client geolocation and threat blocking layers.
   - Zero-copy request extensions with ergonomic extractor primitives.
+- [ ] **Generic CIDR/Range Ingestion & SPI/Vendor Adapters**:
+  - Decouple vendor formats (MaxMind GeoLite2, DB-IP, custom enterprise feeds) via pluggable SPI adapters.
 - [ ] **Continuous Fuzzing Suite**:
   - `cargo-fuzz` harness targeting malformed headers, invalid string offsets, and corrupted interval tables.
 - [ ] **Thread-Safe Hot-Reload Abstraction**:

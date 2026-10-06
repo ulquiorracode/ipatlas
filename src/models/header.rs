@@ -2,6 +2,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 pub const MAGIC: [u8; 4] = *b"ATLS";
 pub const HEADER_SIZE_V4: usize = 68;
+pub const HEADER_SIZE_GEN4: usize = 68;
 
 /// Logical container generation version.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -51,12 +52,15 @@ pub const VERSION_V4_COMPACT: u16 = 0x0401; // Legacy V4.1 compact AoS compatibi
 
 pub const RECORD_SIZE_V4_STANDARD: u16 = 12;
 pub const RECORD_SIZE_V4_COMPACT: u16 = 8;
+pub const RECORD_SIZE_IPV4_STANDARD: u16 = 12;
+pub const RECORD_SIZE_IPV4_COMPACT: u16 = 8;
 pub const PROFILE_SIZE_V4: usize = 20;
+pub const PROFILE_SIZE_GEN4: usize = 20;
 
-/// Header structure for IPAtlas Version 4 and 4.1 databases (68 bytes).
+/// Header structure for IPAtlas Generation 4 databases (68 bytes).
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, FromBytes, IntoBytes, KnownLayout, Immutable)]
-pub struct HeaderV4 {
+pub struct HeaderGen4 {
     pub magic: [u8; 4],
     pub version: u16,
     pub total_records: u32,
@@ -77,7 +81,10 @@ pub struct HeaderV4 {
     pub isp_data_len: u32,
 }
 
-impl HeaderV4 {
+/// Legacy alias for [`HeaderGen4`].
+pub type HeaderV4 = HeaderGen4;
+
+impl HeaderGen4 {
     #[inline(always)]
     pub fn is_soa(&self) -> bool {
         self.version == VERSION_V4_COMPACT_SOA || self.version == VERSION_V4_STANDARD_SOA
@@ -180,12 +187,15 @@ pub const VERSION_V5_COMPACT_SOA: u16 = 0x0503;
 pub const VERSION_V5_COMPACT: u16 = 0x0501; // Legacy V5 compact AoS compatibility alias
 
 pub const RECORD_SIZE_V6: u16 = 36;
+pub const RECORD_SIZE_IPV6_STANDARD: u16 = 36;
+pub const RECORD_SIZE_IPV6_COMPACT: u16 = 16;
 pub const HEADER_SIZE_V5: usize = 80;
+pub const HEADER_SIZE_GEN5: usize = 80;
 
-/// Header structure for IPAtlas Generation V5 dual-stack databases (80 bytes).
+/// Header structure for IPAtlas Generation 5 dual-stack databases (80 bytes).
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, FromBytes, IntoBytes, KnownLayout, Immutable)]
-pub struct HeaderV5 {
+pub struct HeaderGen5 {
     pub magic: [u8; 4],
     pub version: u16,
     pub total_records_v4: u32,
@@ -210,13 +220,24 @@ pub struct HeaderV5 {
     pub crc32: u32,
 }
 
-/// Header flags bitmask stored in `HeaderV5::reserved`.
-pub const HEADER_FLAG_EMBEDDED_ZSTD: u16 = 1 << 2;
+/// Legacy alias for [`HeaderGen5`].
+pub type HeaderV5 = HeaderGen5;
 
-impl HeaderV5 {
+/// Header flags bitmask stored in `HeaderGen5::reserved`.
+pub const HEADER_FLAG_EMBEDDED_ZSTD: u16 = 1 << 2;
+/// Reserved bit for future columnar IPv6 SoA key array (hi: u64 / lo: u64 columnar layouts).
+pub const HEADER_FLAG_SOA_V6: u16 = 1 << 3;
+
+impl HeaderGen5 {
     #[inline(always)]
     pub fn is_soa(&self) -> bool {
         self.version == VERSION_V5_COMPACT_SOA || self.version == VERSION_V5_STANDARD_SOA
+    }
+
+    /// Returns true if IPv6 records are arranged in Structure of Arrays columnar layout.
+    #[inline(always)]
+    pub fn is_soa_v6(&self) -> bool {
+        (self.reserved & HEADER_FLAG_SOA_V6) != 0
     }
 
     #[inline(always)]
@@ -225,6 +246,11 @@ impl HeaderV5 {
             || self.version == VERSION_V5_COMPACT
             || self.version == VERSION_V5_COMPACT_AOS
             || self.version == VERSION_V5_COMPACT_SOA
+    }
+
+    #[inline(always)]
+    pub fn is_compact_v6(&self) -> bool {
+        self.record_size_v6 == RECORD_SIZE_IPV6_COMPACT
     }
 
     #[inline(always)]
@@ -269,8 +295,11 @@ impl HeaderV5 {
             return Err("Unsupported Generation V5 version or mismatched record size");
         }
 
-        if self.total_records_v6 > 0 && self.record_size_v6 != RECORD_SIZE_V6 {
-            return Err("Invalid IPv6 record size (expected 36 bytes)");
+        if self.total_records_v6 > 0
+            && self.record_size_v6 != RECORD_SIZE_IPV6_STANDARD
+            && self.record_size_v6 != RECORD_SIZE_IPV6_COMPACT
+        {
+            return Err("Invalid IPv6 record size (expected 36 bytes or 16 bytes for Split-64)");
         }
 
         let v4_bytes = (self.total_records_v4 as u64) * (self.record_size_v4 as u64);

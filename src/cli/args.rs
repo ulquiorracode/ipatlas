@@ -76,6 +76,10 @@ pub struct CompileArgs {
     /// Compress payload via embedded Zstandard frame (zstd-19) for ultra-compact disk storage
     #[arg(long = "embedded-zstd", alias = "zstd")]
     pub embedded_zstd: bool,
+
+    /// Opt-in lossy 16-byte IPv6 Split-64 format (over-approximates sub-/64 intervals)
+    #[arg(long = "split64-v6", aliases = ["split64", "lossy-v6"])]
+    pub split64_v6: bool,
 }
 
 #[derive(Args)]

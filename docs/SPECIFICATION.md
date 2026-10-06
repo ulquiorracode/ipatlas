@@ -15,8 +15,9 @@ All IPAtlas binary artifacts start with a 32-byte or 64-byte aligned header.
 ---
 
 ## 2. Orthogonal 3D Format Matrix & Layout Tiers
- 
+
 IPAtlas structures its physical database containers across three orthogonal dimensions:
+
 - **Generation**: `V4` (legacy/IPv4-focused, 64-byte header) vs `V5` (dual-stack IPv4+IPv6, 80-byte header).
 - **Family**: `Standard` (12B per range, 32-bit profile index) vs `Compact` (8B per range, 16-bit count + profile index) vs `Succinct` (Elias-Fano bitvector).
 - **Layout**: `AoS` (Array of Structures: interleaved range records) vs `SoA` (Structure of Arrays: decoupled columnar slices).
@@ -41,15 +42,16 @@ IPAtlas structures its physical database containers across three orthogonal dime
 | Tier & Layout | Status | Record Size | Primary Structure | 5.3M Production RAM | Shannon Ratio | Hot L1 Latency | Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$) | vs MaxMind MMDB |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **MaxMind MMDB** *(Baseline)* | Industry Standard | ~22 bytes (tree) | Radix Trie (Chasing) | **115.0 MB** | $6.50 \times H_{\text{raw}}$ | **1,100 ns** | **$126,500\text{ MB}\cdot\text{ns}$** (1.0x baseline) | Reference |
-| **Tier 1: `V4/V5-Standard (AoS)`** | **Production** | 12 bytes | `RangeV4` | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **66.7 ns** | **$4,075\text{ MB}\cdot\text{ns}$** | **31.0x more efficient** |
-| **Tier 2: `V4/V5-Compact (AoS)`** | **Production** | 8 bytes | `RangeV4Compact` | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **60.9 ns** | **$2,515\text{ MB}\cdot\text{ns}$** | **50.3x more efficient** |
-| **Tier 2: `V4/V5-Compact (SoA)`** | **Production** | 8 bytes (columnar) | `soa_ip_from` + `count` + `profile` | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **15.4 ns** | **$636\text{ MB}\cdot\text{ns}$** *(Peak Hardware Sweet Spot)* | **198.8x more efficient** |
+| **Tier 1: `Gen4/Gen5-Standard (AoS)`** | **Production** | 12 bytes | `Ipv4Range` | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **66.7 ns** | **$4,075\text{ MB}\cdot\text{ns}$** | **31.0x more efficient** |
+| **Tier 2: `Gen4/Gen5-Compact (AoS)`** | **Production** | 8 bytes | `Ipv4RangeCompact` | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **60.9 ns** | **$2,515\text{ MB}\cdot\text{ns}$** | **50.3x more efficient** |
+| **Tier 2: `Gen4/Gen5-Compact (SoA)`** | **Production** | 8 bytes (columnar) | `soa_ip_from` + `count` + `profile` | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **15.4 ns** | **$636\text{ MB}\cdot\text{ns}$** *(Peak Hardware Sweet Spot)* | **198.8x more efficient** |
 | **Flags-Only Fast Path (SoA/AoS)** | **Production** | 0B (direct slice) | `lookup_flags_u32` (no strings) | N/A | N/A | **18.5 ns** | N/A | Edge Firewall Mode |
-| **Tier 3: `V5-Succinct`** | **Experimental** *(Non-Prod)* | $\sim 2.8$ bytes | Elias-Fano Bitvector | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
+| **Tier 3: `Gen5-Succinct`** | **Experimental** *(Non-Prod)* | $\sim 2.8$ bytes | Elias-Fano Bitvector | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
 
 ### 2.1 Benchmark Testbed & Reproduction Conditions
 
 To ensure strict scientific reproducibility and eliminate unsubstantiated marketing figures:
+
 - **Processor**: Intel Core i7 / AMD Ryzen 9 class x86_64 host (3.60 GHz base, AVX2 enabled, 32KB L1d cache, 512KB L2 cache per core).
 - **Operating System**: Windows 11 Pro / Ubuntu 22.04 LTS kernel 6.5.
 - **Harness & Profiler**: Criterion.rs 0.5.1 with 1,000,000 warm-up samples, 1024 pseudo-random queries to defeat branch prediction (`benches/lookup_bench.rs`).
@@ -74,11 +76,13 @@ Universal layout for unconstrained profile counts ($> 65{,}535$).
 
 - **Alignment**: 4 bytes.
 - **Zero-Copy**: Slices mapped directly via `zerocopy::FromBytes` without conversions.
-- **Binary Search**: Flat binary search over `&[RangeV4]`.
+- **Binary Search**: Flat binary search over `&[Ipv4Range]`.
 
 ---
 
-## 4. Tier 2: V4/V5-Compact (8 Bytes)
+## 4. Tier 2: Compact Formats (IPv4 & IPv6 Split-64)
+
+### 4.1 IPv4 Compact (8 Bytes)
 
 Engineered for CPU cache line density (8 intervals per 64-byte cache line).
 
@@ -94,6 +98,23 @@ Engineered for CPU cache line density (8 intervals per 64-byte cache line).
 - **`profile_id`**: 16-bit normalized profile pointer.
 - **Span Splitting**: Intervals spanning $> 65{,}535$ IPs are sliced into consecutive 8-byte chunks by `CompactRangePacker`.
 - **Automatic Fallback**: If unique profile count exceeds `u16::MAX` (65,535), compiler safely upgrades to `Standard` (12B).
+
+### 4.2 IPv6 Split-64 Compact (`Ipv6RangeSplit64`, 16 Bytes)
+
+Engineered to eliminate cache-line straddling and shrink 128-bit IPv6 intervals from 36 bytes down to 16 bytes:
+
+```text
++------------------------------------+-------------------+-------------------+
+|       ip_from_hi (u64, 8B)         | count_hi (u32, 4B)| profile (u32, 4B) |
++------------------------------------+-------------------+-------------------+
+0                                    8                   12                  16
+```
+
+- **`ip_from_hi`**: Upper 64 bits of the base IPv6 address (`(ip_from >> 64) as u64`).
+- **`count_hi`**: Number of `/64` blocks spanned minus 1 (`ip_to_hi = ip_from_hi + count_hi`).
+- **`profile_id`**: 32-bit normalized profile pointer.
+- **Cache Alignment**: Exactly **4 records per 64-byte cache line** ($\gcd(16, 64) = 16$), ensuring zero cache-line straddling.
+- **Physical Footprint**: Reduces IPv6 table footprint by **55.6%** (2.25x compression factor).
 
 ---
 
@@ -128,9 +149,10 @@ The global IPv4 table contains $N \approx 5.3 \times 10^6$ disjoint intervals in
 
 ### 5.3 Incompressibility Invariant of Succinct Streams
 
-Because the Elias-Fano representation already compresses the interval boundaries down to maximal theoretical entropy ($H \approx 1.0\text{ bit/bit}$), the lower-bits bitstream is statistically indistinguishable from uniform white noise. 
+Because the Elias-Fano representation already compresses the interval boundaries down to maximal theoretical entropy ($H \approx 1.0\text{ bit/bit}$), the lower-bits bitstream is statistically indistinguishable from uniform white noise.
 
 Applying dictionary or statistical block compressors (Zstandard, Deflate/Gzip) on top of raw `V5-Succinct` binaries yields a negligible reduction of only **3–7%** while introducing decompression CPU latency and heap overhead. Consequently:
+
 - **`V5-Succinct` data MUST be deployed and served strictly as raw binary images**.
 - External or embedded compression layers are architectural anti-patterns when paired with Succinct encodings.
 

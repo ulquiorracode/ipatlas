@@ -5,14 +5,15 @@ use std::path::Path;
 use zerocopy::FromBytes;
 
 use crate::models::{
-    compute_crc32, GeoFlags, GeoRecord, GeoRecordRef, HeaderV4, HeaderV5, ProfileV4, RangeV4,
-    RangeV4Compact, RangeV6, RecordFamily, StorageLayout, HEADER_SIZE_V4, HEADER_SIZE_V5, MAGIC,
-    PROFILE_SIZE_V4, RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD, VERSION_V4_COMPACT_AOS,
-    VERSION_V4_COMPACT_SOA, VERSION_V4_STANDARD, VERSION_V4_STANDARD_AOS, VERSION_V4_STANDARD_SOA,
-    VERSION_V5_COMPACT_AOS, VERSION_V5_COMPACT_SOA, VERSION_V5_STANDARD, VERSION_V5_STANDARD_SOA,
+    compute_crc32, GeoFlags, GeoRecord, GeoRecordRef, HeaderV4, HeaderV5, Ipv4Range,
+    Ipv4RangeCompact, Ipv6Range, Ipv6RangeSplit64, ProfileGen4, RecordFamily, StorageLayout,
+    HEADER_SIZE_V4, HEADER_SIZE_V5, MAGIC, PROFILE_SIZE_V4, RECORD_SIZE_V4_COMPACT,
+    RECORD_SIZE_V4_STANDARD, VERSION_V4_COMPACT_AOS, VERSION_V4_COMPACT_SOA, VERSION_V4_STANDARD,
+    VERSION_V4_STANDARD_AOS, VERSION_V4_STANDARD_SOA, VERSION_V5_COMPACT_AOS,
+    VERSION_V5_COMPACT_SOA, VERSION_V5_STANDARD, VERSION_V5_STANDARD_SOA,
 };
 pub use crate::reader::buffer::StorageBuffer;
-pub(crate) use crate::reader::dispatch::TableDispatch;
+pub(crate) use crate::reader::dispatch::{TableDispatch, TableDispatchV6};
 pub use crate::reader::error::ReaderError;
 pub(crate) use crate::reader::strings::StringTableRef;
 
@@ -28,8 +29,7 @@ pub struct IpAtlasReader {
     mmap: StorageBuffer,
     header: HeaderVariant,
     dispatch: TableDispatch,
-    v6_start: usize,
-    v6_count: usize,
+    dispatch_v6: TableDispatchV6,
     prof_start: usize,
     prof_count: usize,
     cities: StringTableRef,
@@ -50,6 +50,13 @@ impl IpAtlasReader {
 
         let mmap = unsafe { Mmap::map(&file)? };
         Self::from_mmap(mmap, file_len)
+    }
+
+    /// Opens and verifies CRC32 (V5 only; V4 no-op). `open()` stays header-only.
+    pub fn open_verified<P: AsRef<Path>>(path: P) -> Result<Self, ReaderError> {
+        let reader = Self::open(path)?;
+        reader.validate_checksum()?;
+        Ok(reader)
     }
 
     /// Constructs reader from an existing memory mapping.
@@ -122,236 +129,243 @@ impl IpAtlasReader {
         let raw_buf = &storage[..];
 
         // Pre-validate slices and construct TableDispatch
-        let (dispatch, v6_start, v6_count, prof_start, prof_count, cities, regions, isps) =
-            match &header {
-                HeaderVariant::V4(h) => {
-                    let total = h.total_records as usize;
-                    let disp = if total == 0 {
-                        TableDispatch::Empty
-                    } else if h.is_soa() {
-                        let start = HEADER_SIZE_V4;
-                        let ip_from_bytes = total * 4;
-                        <[u32]>::ref_from_bytes(&raw_buf[start..start + ip_from_bytes]).map_err(
-                            |_| ReaderError::Corrupted("Unaligned or invalid SoA ip_from slice"),
-                        )?;
-                        if h.is_compact() {
-                            let counts_start = start + ip_from_bytes;
-                            let counts_bytes = total * 2;
-                            let prof_start = counts_start + counts_bytes;
-                            let prof_bytes = total * 2;
-                            <[u16]>::ref_from_bytes(
-                                &raw_buf[counts_start..counts_start + counts_bytes],
-                            )
-                            .map_err(|_| {
-                                ReaderError::Corrupted("Unaligned or invalid SoA count slice")
-                            })?;
-                            <[u16]>::ref_from_bytes(&raw_buf[prof_start..prof_start + prof_bytes])
-                                .map_err(|_| {
-                                    ReaderError::Corrupted(
-                                        "Unaligned or invalid SoA profile_id slice",
-                                    )
-                                })?;
-                            TableDispatch::V4CompactSoa {
-                                ip_from_off: start,
-                                counts_off: counts_start,
-                                prof_off: prof_start,
-                                count: total,
-                            }
-                        } else {
-                            let to_start = start + ip_from_bytes;
-                            let to_bytes = total * 4;
-                            let prof_start = to_start + to_bytes;
-                            let prof_bytes = total * 4;
-                            <[u32]>::ref_from_bytes(&raw_buf[to_start..to_start + to_bytes])
-                                .map_err(|_| {
-                                    ReaderError::Corrupted("Unaligned or invalid SoA ip_to slice")
-                                })?;
-                            <[u32]>::ref_from_bytes(&raw_buf[prof_start..prof_start + prof_bytes])
-                                .map_err(|_| {
-                                    ReaderError::Corrupted(
-                                        "Unaligned or invalid SoA profile_id slice",
-                                    )
-                                })?;
-                            TableDispatch::V4StandardSoa {
-                                ip_from_off: start,
-                                ip_to_off: to_start,
-                                prof_off: prof_start,
-                                count: total,
-                            }
-                        }
-                    } else if h.is_compact() {
-                        let start = HEADER_SIZE_V4;
-                        let end = start + total * (RECORD_SIZE_V4_COMPACT as usize);
-                        <[RangeV4Compact]>::ref_from_bytes(&raw_buf[start..end]).map_err(|_| {
-                            ReaderError::Corrupted("Unaligned or invalid RangeV4Compact slice")
+        let (dispatch, dispatch_v6, prof_start, prof_count, cities, regions, isps) = match &header {
+            HeaderVariant::V4(h) => {
+                let total = h.total_records as usize;
+                let disp = if total == 0 {
+                    TableDispatch::Empty
+                } else if h.is_soa() {
+                    let start = HEADER_SIZE_V4;
+                    let ip_from_bytes = total * 4;
+                    <[u32]>::ref_from_bytes(&raw_buf[start..start + ip_from_bytes]).map_err(
+                        |_| ReaderError::Corrupted("Unaligned or invalid SoA ip_from slice"),
+                    )?;
+                    if h.is_compact() {
+                        let counts_start = start + ip_from_bytes;
+                        let counts_bytes = total * 2;
+                        let prof_start = counts_start + counts_bytes;
+                        let prof_bytes = total * 2;
+                        <[u16]>::ref_from_bytes(
+                            &raw_buf[counts_start..counts_start + counts_bytes],
+                        )
+                        .map_err(|_| {
+                            ReaderError::Corrupted("Unaligned or invalid SoA count slice")
                         })?;
-                        TableDispatch::V4CompactAos {
-                            offset: start,
+                        <[u16]>::ref_from_bytes(&raw_buf[prof_start..prof_start + prof_bytes])
+                            .map_err(|_| {
+                                ReaderError::Corrupted("Unaligned or invalid SoA profile_id slice")
+                            })?;
+                        TableDispatch::V4CompactSoa {
+                            ip_from_off: start,
+                            counts_off: counts_start,
+                            prof_off: prof_start,
                             count: total,
                         }
                     } else {
-                        let start = HEADER_SIZE_V4;
-                        let end = start + total * (RECORD_SIZE_V4_STANDARD as usize);
-                        <[RangeV4]>::ref_from_bytes(&raw_buf[start..end]).map_err(|_| {
-                            ReaderError::Corrupted("Unaligned or invalid RangeV4 slice")
-                        })?;
-                        TableDispatch::V4StandardAos {
-                            offset: start,
+                        let to_start = start + ip_from_bytes;
+                        let to_bytes = total * 4;
+                        let prof_start = to_start + to_bytes;
+                        let prof_bytes = total * 4;
+                        <[u32]>::ref_from_bytes(&raw_buf[to_start..to_start + to_bytes]).map_err(
+                            |_| ReaderError::Corrupted("Unaligned or invalid SoA ip_to slice"),
+                        )?;
+                        <[u32]>::ref_from_bytes(&raw_buf[prof_start..prof_start + prof_bytes])
+                            .map_err(|_| {
+                                ReaderError::Corrupted("Unaligned or invalid SoA profile_id slice")
+                            })?;
+                        TableDispatch::V4StandardSoa {
+                            ip_from_off: start,
+                            ip_to_off: to_start,
+                            prof_off: prof_start,
                             count: total,
                         }
-                    };
-
-                    let p_start = h.profile_offset as usize;
-                    let p_count = h.profile_count as usize;
-                    let p_end = p_start + p_count * PROFILE_SIZE_V4;
-                    <[ProfileV4]>::ref_from_bytes(&raw_buf[p_start..p_end]).map_err(|_| {
-                        ReaderError::Corrupted("Unaligned or invalid ProfileV4 slice")
-                    })?;
-
-                    let c_ref = StringTableRef {
-                        count: h.city_count as usize,
-                        idx_start: h.city_idx_off as usize,
-                        data_start: h.city_data_off as usize,
-                        data_len: h.city_data_len as usize,
-                    };
-                    let r_ref = StringTableRef {
-                        count: h.region_count as usize,
-                        idx_start: h.region_idx_off as usize,
-                        data_start: h.region_data_off as usize,
-                        data_len: h.region_data_len as usize,
-                    };
-                    let i_ref = StringTableRef {
-                        count: h.isp_count as usize,
-                        idx_start: h.isp_idx_off as usize,
-                        data_start: h.isp_data_off as usize,
-                        data_len: h.isp_data_len as usize,
-                    };
-
-                    (disp, 0, 0, p_start, p_count, c_ref, r_ref, i_ref)
-                }
-                HeaderVariant::V5(h) => {
-                    let total_v4 = h.total_records_v4 as usize;
-                    let v4_start = HEADER_SIZE_V5;
-                    let v4_end = v4_start + total_v4 * (h.record_size_v4 as usize);
-
-                    let disp = if total_v4 == 0 {
-                        TableDispatch::Empty
-                    } else if h.is_soa() {
-                        let ip_from_bytes = total_v4 * 4;
-                        <[u32]>::ref_from_bytes(&raw_buf[v4_start..v4_start + ip_from_bytes])
-                            .map_err(|_| {
-                                ReaderError::Corrupted("Unaligned or invalid SoA ip_from slice")
-                            })?;
-                        if h.is_compact_v4() {
-                            let counts_start = v4_start + ip_from_bytes;
-                            let counts_bytes = total_v4 * 2;
-                            let prof_start = counts_start + counts_bytes;
-                            let prof_bytes = total_v4 * 2;
-                            <[u16]>::ref_from_bytes(
-                                &raw_buf[counts_start..counts_start + counts_bytes],
-                            )
-                            .map_err(|_| {
-                                ReaderError::Corrupted("Unaligned or invalid SoA count slice")
-                            })?;
-                            <[u16]>::ref_from_bytes(&raw_buf[prof_start..prof_start + prof_bytes])
-                                .map_err(|_| {
-                                    ReaderError::Corrupted(
-                                        "Unaligned or invalid SoA profile_id slice",
-                                    )
-                                })?;
-                            TableDispatch::V5CompactSoa {
-                                ip_from_off: v4_start,
-                                counts_off: counts_start,
-                                prof_off: prof_start,
-                                count: total_v4,
-                            }
-                        } else {
-                            let to_start = v4_start + ip_from_bytes;
-                            let to_bytes = total_v4 * 4;
-                            let prof_start = to_start + to_bytes;
-                            let prof_bytes = total_v4 * 4;
-                            <[u32]>::ref_from_bytes(&raw_buf[to_start..to_start + to_bytes])
-                                .map_err(|_| {
-                                    ReaderError::Corrupted("Unaligned or invalid SoA ip_to slice")
-                                })?;
-                            <[u32]>::ref_from_bytes(&raw_buf[prof_start..prof_start + prof_bytes])
-                                .map_err(|_| {
-                                    ReaderError::Corrupted(
-                                        "Unaligned or invalid SoA profile_id slice",
-                                    )
-                                })?;
-                            TableDispatch::V5StandardSoa {
-                                ip_from_off: v4_start,
-                                ip_to_off: to_start,
-                                prof_off: prof_start,
-                                count: total_v4,
-                            }
-                        }
-                    } else if h.is_compact_v4() {
-                        <[RangeV4Compact]>::ref_from_bytes(&raw_buf[v4_start..v4_end]).map_err(
-                            |_| ReaderError::Corrupted("Unaligned or invalid RangeV4Compact slice"),
-                        )?;
-                        TableDispatch::V5CompactAos {
-                            offset: v4_start,
-                            count: total_v4,
-                        }
-                    } else {
-                        <[RangeV4]>::ref_from_bytes(&raw_buf[v4_start..v4_end]).map_err(|_| {
-                            ReaderError::Corrupted("Unaligned or invalid RangeV4 slice")
-                        })?;
-                        TableDispatch::V5StandardAos {
-                            offset: v4_start,
-                            count: total_v4,
-                        }
-                    };
-
-                    let total_v6 = h.total_records_v6 as usize;
-                    let v6_start = v4_end;
-                    let v6_end = v6_start + total_v6 * (h.record_size_v6 as usize);
-                    if total_v6 > 0 {
-                        <[RangeV6]>::ref_from_bytes(&raw_buf[v6_start..v6_end]).map_err(|_| {
-                            ReaderError::Corrupted("Unaligned or invalid RangeV6 slice")
-                        })?;
                     }
-
-                    let p_start = h.profile_offset as usize;
-                    let p_count = h.profile_count as usize;
-                    let p_end = p_start + p_count * PROFILE_SIZE_V4;
-                    <[ProfileV4]>::ref_from_bytes(&raw_buf[p_start..p_end]).map_err(|_| {
-                        ReaderError::Corrupted("Unaligned or invalid ProfileV4 slice")
+                } else if h.is_compact() {
+                    let start = HEADER_SIZE_V4;
+                    let end = start + total * (RECORD_SIZE_V4_COMPACT as usize);
+                    <[Ipv4RangeCompact]>::ref_from_bytes(&raw_buf[start..end]).map_err(|_| {
+                        ReaderError::Corrupted("Unaligned or invalid Ipv4RangeCompact slice")
                     })?;
+                    TableDispatch::V4CompactAos {
+                        offset: start,
+                        count: total,
+                    }
+                } else {
+                    let start = HEADER_SIZE_V4;
+                    let end = start + total * (RECORD_SIZE_V4_STANDARD as usize);
+                    <[Ipv4Range]>::ref_from_bytes(&raw_buf[start..end]).map_err(|_| {
+                        ReaderError::Corrupted("Unaligned or invalid Ipv4Range slice")
+                    })?;
+                    TableDispatch::V4StandardAos {
+                        offset: start,
+                        count: total,
+                    }
+                };
 
-                    let c_ref = StringTableRef {
-                        count: h.city_count as usize,
-                        idx_start: h.city_idx_off as usize,
-                        data_start: h.city_data_off as usize,
-                        data_len: h.city_data_len as usize,
-                    };
-                    let r_ref = StringTableRef {
-                        count: h.region_count as usize,
-                        idx_start: h.region_idx_off as usize,
-                        data_start: h.region_data_off as usize,
-                        data_len: h.region_data_len as usize,
-                    };
-                    let i_ref = StringTableRef {
-                        count: h.isp_count as usize,
-                        idx_start: h.isp_idx_off as usize,
-                        data_start: h.isp_data_off as usize,
-                        data_len: h.isp_data_len as usize,
-                    };
+                let p_start = h.profile_offset as usize;
+                let p_count = h.profile_count as usize;
+                let p_end = p_start + p_count * PROFILE_SIZE_V4;
+                <[ProfileGen4]>::ref_from_bytes(&raw_buf[p_start..p_end]).map_err(|_| {
+                    ReaderError::Corrupted("Unaligned or invalid ProfileGen4 slice")
+                })?;
 
-                    (
-                        disp, v6_start, total_v6, p_start, p_count, c_ref, r_ref, i_ref,
-                    )
-                }
-            };
+                let c_ref = StringTableRef {
+                    count: h.city_count as usize,
+                    idx_start: h.city_idx_off as usize,
+                    data_start: h.city_data_off as usize,
+                    data_len: h.city_data_len as usize,
+                };
+                let r_ref = StringTableRef {
+                    count: h.region_count as usize,
+                    idx_start: h.region_idx_off as usize,
+                    data_start: h.region_data_off as usize,
+                    data_len: h.region_data_len as usize,
+                };
+                let i_ref = StringTableRef {
+                    count: h.isp_count as usize,
+                    idx_start: h.isp_idx_off as usize,
+                    data_start: h.isp_data_off as usize,
+                    data_len: h.isp_data_len as usize,
+                };
+
+                (
+                    disp,
+                    TableDispatchV6::Empty,
+                    p_start,
+                    p_count,
+                    c_ref,
+                    r_ref,
+                    i_ref,
+                )
+            }
+            HeaderVariant::V5(h) => {
+                let total_v4 = h.total_records_v4 as usize;
+                let v4_start = HEADER_SIZE_V5;
+                let v4_end = v4_start + total_v4 * (h.record_size_v4 as usize);
+
+                let disp = if total_v4 == 0 {
+                    TableDispatch::Empty
+                } else if h.is_soa() {
+                    let ip_from_bytes = total_v4 * 4;
+                    <[u32]>::ref_from_bytes(&raw_buf[v4_start..v4_start + ip_from_bytes]).map_err(
+                        |_| ReaderError::Corrupted("Unaligned or invalid SoA ip_from slice"),
+                    )?;
+                    if h.is_compact_v4() {
+                        let counts_start = v4_start + ip_from_bytes;
+                        let counts_bytes = total_v4 * 2;
+                        let prof_start = counts_start + counts_bytes;
+                        let prof_bytes = total_v4 * 2;
+                        <[u16]>::ref_from_bytes(
+                            &raw_buf[counts_start..counts_start + counts_bytes],
+                        )
+                        .map_err(|_| {
+                            ReaderError::Corrupted("Unaligned or invalid SoA count slice")
+                        })?;
+                        <[u16]>::ref_from_bytes(&raw_buf[prof_start..prof_start + prof_bytes])
+                            .map_err(|_| {
+                                ReaderError::Corrupted("Unaligned or invalid SoA profile_id slice")
+                            })?;
+                        TableDispatch::V5CompactSoa {
+                            ip_from_off: v4_start,
+                            counts_off: counts_start,
+                            prof_off: prof_start,
+                            count: total_v4,
+                        }
+                    } else {
+                        let to_start = v4_start + ip_from_bytes;
+                        let to_bytes = total_v4 * 4;
+                        let prof_start = to_start + to_bytes;
+                        let prof_bytes = total_v4 * 4;
+                        <[u32]>::ref_from_bytes(&raw_buf[to_start..to_start + to_bytes]).map_err(
+                            |_| ReaderError::Corrupted("Unaligned or invalid SoA ip_to slice"),
+                        )?;
+                        <[u32]>::ref_from_bytes(&raw_buf[prof_start..prof_start + prof_bytes])
+                            .map_err(|_| {
+                                ReaderError::Corrupted("Unaligned or invalid SoA profile_id slice")
+                            })?;
+                        TableDispatch::V5StandardSoa {
+                            ip_from_off: v4_start,
+                            ip_to_off: to_start,
+                            prof_off: prof_start,
+                            count: total_v4,
+                        }
+                    }
+                } else if h.is_compact_v4() {
+                    <[Ipv4RangeCompact]>::ref_from_bytes(&raw_buf[v4_start..v4_end]).map_err(
+                        |_| ReaderError::Corrupted("Unaligned or invalid Ipv4RangeCompact slice"),
+                    )?;
+                    TableDispatch::V5CompactAos {
+                        offset: v4_start,
+                        count: total_v4,
+                    }
+                } else {
+                    <[Ipv4Range]>::ref_from_bytes(&raw_buf[v4_start..v4_end]).map_err(|_| {
+                        ReaderError::Corrupted("Unaligned or invalid Ipv4Range slice")
+                    })?;
+                    TableDispatch::V5StandardAos {
+                        offset: v4_start,
+                        count: total_v4,
+                    }
+                };
+
+                let total_v6 = h.total_records_v6 as usize;
+                let v6_start = v4_end;
+                let v6_end = v6_start + total_v6 * (h.record_size_v6 as usize);
+                let disp_v6 = if total_v6 == 0 {
+                    TableDispatchV6::Empty
+                } else if h.is_compact_v6() {
+                    <[Ipv6RangeSplit64]>::ref_from_bytes(&raw_buf[v6_start..v6_end]).map_err(
+                        |_| ReaderError::Corrupted("Unaligned or invalid Ipv6RangeSplit64 slice"),
+                    )?;
+                    TableDispatchV6::Split64Compact {
+                        offset: v6_start,
+                        count: total_v6,
+                    }
+                } else {
+                    <[Ipv6Range]>::ref_from_bytes(&raw_buf[v6_start..v6_end]).map_err(|_| {
+                        ReaderError::Corrupted("Unaligned or invalid Ipv6Range slice")
+                    })?;
+                    TableDispatchV6::StandardAos {
+                        offset: v6_start,
+                        count: total_v6,
+                    }
+                };
+
+                let p_start = h.profile_offset as usize;
+                let p_count = h.profile_count as usize;
+                let p_end = p_start + p_count * PROFILE_SIZE_V4;
+                <[ProfileGen4]>::ref_from_bytes(&raw_buf[p_start..p_end]).map_err(|_| {
+                    ReaderError::Corrupted("Unaligned or invalid ProfileGen4 slice")
+                })?;
+
+                let c_ref = StringTableRef {
+                    count: h.city_count as usize,
+                    idx_start: h.city_idx_off as usize,
+                    data_start: h.city_data_off as usize,
+                    data_len: h.city_data_len as usize,
+                };
+                let r_ref = StringTableRef {
+                    count: h.region_count as usize,
+                    idx_start: h.region_idx_off as usize,
+                    data_start: h.region_data_off as usize,
+                    data_len: h.region_data_len as usize,
+                };
+                let i_ref = StringTableRef {
+                    count: h.isp_count as usize,
+                    idx_start: h.isp_idx_off as usize,
+                    data_start: h.isp_data_off as usize,
+                    data_len: h.isp_data_len as usize,
+                };
+
+                (disp, disp_v6, p_start, p_count, c_ref, r_ref, i_ref)
+            }
+        };
 
         let reader = Self {
             mmap: storage,
             header,
             dispatch,
-            v6_start,
-            v6_count,
+            dispatch_v6,
             prof_start,
             prof_count,
             cities,
@@ -648,16 +662,16 @@ impl IpAtlasReader {
         }
     }
 
-    /// Zero-copy verified slice of standard V4 ranges (12 bytes per record).
+    /// Zero-copy verified slice of standard IPv4 ranges (12 bytes per record).
     #[inline(always)]
-    pub fn ranges(&self) -> &[RangeV4] {
+    pub fn ranges_ipv4(&self) -> &[Ipv4Range] {
         match self.dispatch {
             TableDispatch::V4StandardAos { offset, count }
             | TableDispatch::V5StandardAos { offset, count } => {
                 // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
                 unsafe {
                     std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(offset) as *const RangeV4,
+                        self.mmap.as_ptr().add(offset) as *const Ipv4Range,
                         count,
                     )
                 }
@@ -666,16 +680,16 @@ impl IpAtlasReader {
         }
     }
 
-    /// Zero-copy verified slice of compact V4 ranges (8 bytes per record).
+    /// Zero-copy verified slice of compact IPv4 ranges (8 bytes per record).
     #[inline(always)]
-    pub fn ranges_compact(&self) -> &[RangeV4Compact] {
+    pub fn ranges_ipv4_compact(&self) -> &[Ipv4RangeCompact] {
         match self.dispatch {
             TableDispatch::V4CompactAos { offset, count }
             | TableDispatch::V5CompactAos { offset, count } => {
                 // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
                 unsafe {
                     std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(offset) as *const RangeV4Compact,
+                        self.mmap.as_ptr().add(offset) as *const Ipv4RangeCompact,
                         count,
                     )
                 }
@@ -684,31 +698,74 @@ impl IpAtlasReader {
         }
     }
 
-    /// Zero-copy verified slice of IPv6 ranges (36 bytes per record).
+    /// Zero-copy verified slice of Standard IPv6 ranges (36 bytes per record).
     #[inline(always)]
-    pub fn ranges_v6(&self) -> &[RangeV6] {
-        if self.v6_count == 0 {
-            return &[];
+    pub fn ranges_ipv6(&self) -> &[Ipv6Range] {
+        match self.dispatch_v6 {
+            TableDispatchV6::StandardAos { offset, count } => {
+                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
+                unsafe {
+                    std::slice::from_raw_parts(
+                        self.mmap.as_ptr().add(offset) as *const Ipv6Range,
+                        count,
+                    )
+                }
+            }
+            _ => &[],
         }
-        // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
-        unsafe {
-            std::slice::from_raw_parts(
-                self.mmap.as_ptr().add(self.v6_start) as *const RangeV6,
-                self.v6_count,
-            )
+    }
+
+    /// Zero-copy verified slice of Compact IPv6 Split-64 ranges (16 bytes per record).
+    #[inline(always)]
+    pub fn ranges_ipv6_compact(&self) -> &[Ipv6RangeSplit64] {
+        match self.dispatch_v6 {
+            TableDispatchV6::Split64Compact { offset, count } => {
+                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
+                unsafe {
+                    std::slice::from_raw_parts(
+                        self.mmap.as_ptr().add(offset) as *const Ipv6RangeSplit64,
+                        count,
+                    )
+                }
+            }
+            _ => &[],
         }
+    }
+
+    /// Alias for [`ranges_ipv4`](Self::ranges_ipv4).
+    #[inline(always)]
+    pub fn ranges(&self) -> &[Ipv4Range] {
+        self.ranges_ipv4()
+    }
+
+    /// Alias for [`ranges_ipv4_compact`](Self::ranges_ipv4_compact).
+    #[inline(always)]
+    pub fn ranges_compact(&self) -> &[Ipv4RangeCompact] {
+        self.ranges_ipv4_compact()
+    }
+
+    /// Alias for [`ranges_ipv6`](Self::ranges_ipv6).
+    #[inline(always)]
+    pub fn ranges_v6(&self) -> &[Ipv6Range] {
+        self.ranges_ipv6()
+    }
+
+    /// Alias for [`ranges_ipv6_compact`](Self::ranges_ipv6_compact).
+    #[inline(always)]
+    pub fn ranges_v6_compact(&self) -> &[Ipv6RangeSplit64] {
+        self.ranges_ipv6_compact()
     }
 
     /// Zero-copy verified slice of normalized profiles (20 bytes per record).
     #[inline(always)]
-    pub fn profiles(&self) -> &[ProfileV4] {
+    pub fn profiles(&self) -> &[ProfileGen4] {
         if self.prof_count == 0 {
             return &[];
         }
         // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
         unsafe {
             std::slice::from_raw_parts(
-                self.mmap.as_ptr().add(self.prof_start) as *const ProfileV4,
+                self.mmap.as_ptr().add(self.prof_start) as *const ProfileGen4,
                 self.prof_count,
             )
         }
@@ -737,10 +794,9 @@ impl IpAtlasReader {
         }
     }
 
-    /// Lookup an IPv4 integer returning a borrowed view `GeoRecordRef`.
-    #[inline]
-    pub fn lookup_u32(&self, ip: u32) -> Option<GeoRecordRef<'_>> {
-        let (ip_from, ip_to, profile_id) = match self.dispatch {
+    #[inline(always)]
+    fn lookup_raw_v4(&self, ip: u32) -> Option<(u32, u32, usize)> {
+        match self.dispatch {
             TableDispatch::V4StandardSoa {
                 ip_from_off,
                 ip_to_off,
@@ -782,7 +838,7 @@ impl IpAtlasReader {
                         count,
                     )
                 };
-                (ip_from, to, *prof_ids.get(idx)? as usize)
+                Some((ip_from, to, *prof_ids.get(idx)? as usize))
             }
             TableDispatch::V4CompactSoa {
                 ip_from_off,
@@ -826,14 +882,14 @@ impl IpAtlasReader {
                         count,
                     )
                 };
-                (ip_from, to, *prof_ids.get(idx)? as usize)
+                Some((ip_from, to, *prof_ids.get(idx)? as usize))
             }
             TableDispatch::V4CompactAos { offset, count }
             | TableDispatch::V5CompactAos { offset, count } => {
                 // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
-                let ranges: &[RangeV4Compact] = unsafe {
+                let ranges: &[Ipv4RangeCompact] = unsafe {
                     std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(offset) as *const RangeV4Compact,
+                        self.mmap.as_ptr().add(offset) as *const Ipv4RangeCompact,
                         count,
                     )
                 };
@@ -846,14 +902,14 @@ impl IpAtlasReader {
                 if !range.contains(ip) {
                     return None;
                 }
-                (range.ip_from, range.ip_to(), range.profile_id as usize)
+                Some((range.ip_from, range.ip_to(), range.profile_id as usize))
             }
             TableDispatch::V4StandardAos { offset, count }
             | TableDispatch::V5StandardAos { offset, count } => {
                 // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
-                let ranges: &[RangeV4] = unsafe {
+                let ranges: &[Ipv4Range] = unsafe {
                     std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(offset) as *const RangeV4,
+                        self.mmap.as_ptr().add(offset) as *const Ipv4Range,
                         count,
                     )
                 };
@@ -866,10 +922,16 @@ impl IpAtlasReader {
                 if !range.contains(ip) {
                     return None;
                 }
-                (range.ip_from, range.ip_to, range.profile_id as usize)
+                Some((range.ip_from, range.ip_to, range.profile_id as usize))
             }
-            TableDispatch::Empty => return None,
-        };
+            TableDispatch::Empty => None,
+        }
+    }
+
+    /// Lookup an IPv4 integer returning a borrowed view `GeoRecordRef`.
+    #[inline]
+    pub fn lookup_u32(&self, ip: u32) -> Option<GeoRecordRef<'_>> {
+        let (ip_from, ip_to, profile_id) = self.lookup_raw_v4(ip)?;
 
         let profiles = self.profiles();
         let prof = profiles.get(profile_id)?;
@@ -890,32 +952,66 @@ impl IpAtlasReader {
         })
     }
 
+    #[inline(always)]
+    fn lookup_raw_v6(&self, ip: u128) -> Option<(u128, u128, usize)> {
+        match self.dispatch_v6 {
+            TableDispatchV6::Split64Compact { offset, count } => {
+                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
+                let ranges: &[Ipv6RangeSplit64] = unsafe {
+                    std::slice::from_raw_parts(
+                        self.mmap.as_ptr().add(offset) as *const Ipv6RangeSplit64,
+                        count,
+                    )
+                };
+                let ip_hi = (ip >> 64) as u64;
+                let idx = match ranges.binary_search_by_key(&ip_hi, |r| r.ip_from_hi) {
+                    Ok(i) => i,
+                    Err(0) => return None,
+                    Err(i) => i - 1,
+                };
+                let range = ranges.get(idx)?;
+                if !range.contains_hi(ip_hi) {
+                    return None;
+                }
+                let from = (range.ip_from_hi as u128) << 64;
+                let to = ((range.ip_to_hi() as u128) << 64) | 0xFFFF_FFFF_FFFF_FFFF;
+                Some((from, to, range.profile_id as usize))
+            }
+            TableDispatchV6::StandardAos { offset, count } => {
+                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
+                let ranges: &[Ipv6Range] = unsafe {
+                    std::slice::from_raw_parts(
+                        self.mmap.as_ptr().add(offset) as *const Ipv6Range,
+                        count,
+                    )
+                };
+                let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from()) {
+                    Ok(i) => i,
+                    Err(0) => return None,
+                    Err(i) => i - 1,
+                };
+                let range = ranges.get(idx)?;
+                if !range.contains(ip) {
+                    return None;
+                }
+                Some((range.ip_from(), range.ip_to(), range.profile_id() as usize))
+            }
+            TableDispatchV6::Empty => None,
+        }
+    }
+
     /// Lookup an IPv6 128-bit integer returning a borrowed view `GeoRecordRef`.
     #[inline]
     pub fn lookup_u128(&self, ip: u128) -> Option<GeoRecordRef<'_>> {
-        let ranges = self.ranges_v6();
-        if ranges.is_empty() {
-            return None;
-        }
-
-        let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
-            Ok(i) => i,
-            Err(0) => return None,
-            Err(i) => i - 1,
-        };
-
-        let range = ranges.get(idx)?;
-        if !range.contains(ip) {
-            return None;
-        }
+        let (ip_from, ip_to, profile_id) = self.lookup_raw_v6(ip)?;
 
         let profiles = self.profiles();
-        let prof = profiles.get(range.profile_id as usize)?;
+        let prof = profiles.get(profile_id)?;
 
         Some(GeoRecordRef {
             ip: IpAddr::V6(Ipv6Addr::from(ip)),
-            ip_from: range.ip_from,
-            ip_to: range.ip_to,
+            ip_from,
+            ip_to,
             is_v6: true,
             country: prof.country_code(),
             region: self.get_region(prof.reg_idx as usize),
@@ -934,14 +1030,12 @@ impl IpAtlasReader {
         match ip {
             IpAddr::V4(v4) => self.lookup_u32(u32::from(v4)),
             IpAddr::V6(v6) => {
-                // Check if IPv4-mapped (::ffff:x.x.x.x) and look up in IPv4 if not in IPv6
-                let ip_u128 = u128::from(v6);
-                if let Some(record) = self.lookup_u128(ip_u128) {
-                    Some(record)
-                } else if let Some(v4) = v6.to_ipv4_mapped() {
+                // Hot-path optimization: IPv4-mapped (::ffff:0:0/96 or ::ffff:x.x.x.x) is directly
+                // routed to fast 32-bit IPv4 lookup, avoiding ~23 cold binary search probes in IPv6 table.
+                if let Some(v4) = v6.to_ipv4_mapped() {
                     self.lookup_u32(u32::from(v4))
                 } else {
-                    None
+                    self.lookup_u128(u128::from(v6))
                 }
             }
         }
@@ -1014,134 +1108,7 @@ impl IpAtlasReader {
     /// Performs zero string resolution (`memchr`) and zero UTF-8 validation.
     #[inline]
     pub fn lookup_flags_u32(&self, ip: u32) -> Option<GeoFlags> {
-        let profile_id = match self.dispatch {
-            TableDispatch::V4StandardSoa {
-                ip_from_off,
-                ip_to_off,
-                prof_off,
-                count,
-            }
-            | TableDispatch::V5StandardSoa {
-                ip_from_off,
-                ip_to_off,
-                prof_off,
-                count,
-            } => {
-                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
-                let ip_froms: &[u32] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(ip_from_off) as *const u32,
-                        count,
-                    )
-                };
-                let idx = match ip_froms.binary_search(&ip) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
-                let tos: &[u32] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(ip_to_off) as *const u32,
-                        count,
-                    )
-                };
-                if ip > *tos.get(idx)? {
-                    return None;
-                }
-                let prof_ids: &[u32] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(prof_off) as *const u32,
-                        count,
-                    )
-                };
-                *prof_ids.get(idx)? as usize
-            }
-            TableDispatch::V4CompactSoa {
-                ip_from_off,
-                counts_off,
-                prof_off,
-                count,
-            }
-            | TableDispatch::V5CompactSoa {
-                ip_from_off,
-                counts_off,
-                prof_off,
-                count,
-            } => {
-                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
-                let ip_froms: &[u32] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(ip_from_off) as *const u32,
-                        count,
-                    )
-                };
-                let idx = match ip_froms.binary_search(&ip) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
-                let ip_from = ip_froms[idx];
-                let counts: &[u16] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(counts_off) as *const u16,
-                        count,
-                    )
-                };
-                let count_val = *counts.get(idx)?;
-                if ip > ip_from.saturating_add(count_val as u32) {
-                    return None;
-                }
-                let prof_ids: &[u16] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(prof_off) as *const u16,
-                        count,
-                    )
-                };
-                *prof_ids.get(idx)? as usize
-            }
-            TableDispatch::V4CompactAos { offset, count }
-            | TableDispatch::V5CompactAos { offset, count } => {
-                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
-                let ranges: &[RangeV4Compact] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(offset) as *const RangeV4Compact,
-                        count,
-                    )
-                };
-                let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
-                let range = ranges.get(idx)?;
-                if !range.contains(ip) {
-                    return None;
-                }
-                range.profile_id as usize
-            }
-            TableDispatch::V4StandardAos { offset, count }
-            | TableDispatch::V5StandardAos { offset, count } => {
-                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
-                let ranges: &[RangeV4] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(offset) as *const RangeV4,
-                        count,
-                    )
-                };
-                let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
-                let range = ranges.get(idx)?;
-                if !range.contains(ip) {
-                    return None;
-                }
-                range.profile_id as usize
-            }
-            TableDispatch::Empty => return None,
-        };
-
+        let (_, _, profile_id) = self.lookup_raw_v4(ip)?;
         let profiles = self.profiles();
         let prof = profiles.get(profile_id)?;
         Some(self.decode_flags(prof.flags))
@@ -1150,22 +1117,9 @@ impl IpAtlasReader {
     /// Fast-path lookup returning only threat/usage flags for an IPv6 address.
     #[inline]
     pub fn lookup_flags_u128(&self, ip: u128) -> Option<GeoFlags> {
-        let ranges = self.ranges_v6();
-        if ranges.is_empty() {
-            return None;
-        }
-
-        let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
-            Ok(i) => i,
-            Err(0) => return None,
-            Err(i) => i - 1,
-        };
-        let range = ranges.get(idx)?;
-        if !range.contains(ip) {
-            return None;
-        }
+        let (_, _, profile_id) = self.lookup_raw_v6(ip)?;
         let profiles = self.profiles();
-        let prof = profiles.get(range.profile_id as usize)?;
+        let prof = profiles.get(profile_id)?;
         Some(self.decode_flags(prof.flags))
     }
 
@@ -1175,13 +1129,10 @@ impl IpAtlasReader {
         match ip {
             IpAddr::V4(v4) => self.lookup_flags_u32(u32::from(v4)),
             IpAddr::V6(v6) => {
-                let ip_u128 = u128::from(v6);
-                if let Some(flags) = self.lookup_flags_u128(ip_u128) {
-                    Some(flags)
-                } else if let Some(v4) = v6.to_ipv4_mapped() {
+                if let Some(v4) = v6.to_ipv4_mapped() {
                     self.lookup_flags_u32(u32::from(v4))
                 } else {
-                    None
+                    self.lookup_flags_u128(u128::from(v6))
                 }
             }
         }
@@ -1196,134 +1147,7 @@ impl IpAtlasReader {
     /// Returns ISO 2-letter country code directly without resolving city, region, or ISP strings.
     #[inline]
     pub fn lookup_country_code_u32(&self, ip: u32) -> Option<&str> {
-        let profile_id = match self.dispatch {
-            TableDispatch::V4StandardSoa {
-                ip_from_off,
-                ip_to_off,
-                prof_off,
-                count,
-            }
-            | TableDispatch::V5StandardSoa {
-                ip_from_off,
-                ip_to_off,
-                prof_off,
-                count,
-            } => {
-                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
-                let ip_froms: &[u32] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(ip_from_off) as *const u32,
-                        count,
-                    )
-                };
-                let idx = match ip_froms.binary_search(&ip) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
-                let tos: &[u32] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(ip_to_off) as *const u32,
-                        count,
-                    )
-                };
-                if ip > *tos.get(idx)? {
-                    return None;
-                }
-                let prof_ids: &[u32] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(prof_off) as *const u32,
-                        count,
-                    )
-                };
-                *prof_ids.get(idx)? as usize
-            }
-            TableDispatch::V4CompactSoa {
-                ip_from_off,
-                counts_off,
-                prof_off,
-                count,
-            }
-            | TableDispatch::V5CompactSoa {
-                ip_from_off,
-                counts_off,
-                prof_off,
-                count,
-            } => {
-                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
-                let ip_froms: &[u32] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(ip_from_off) as *const u32,
-                        count,
-                    )
-                };
-                let idx = match ip_froms.binary_search(&ip) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
-                let ip_from = ip_froms[idx];
-                let counts: &[u16] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(counts_off) as *const u16,
-                        count,
-                    )
-                };
-                let count_val = *counts.get(idx)?;
-                if ip > ip_from.saturating_add(count_val as u32) {
-                    return None;
-                }
-                let prof_ids: &[u16] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(prof_off) as *const u16,
-                        count,
-                    )
-                };
-                *prof_ids.get(idx)? as usize
-            }
-            TableDispatch::V4CompactAos { offset, count }
-            | TableDispatch::V5CompactAos { offset, count } => {
-                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
-                let ranges: &[RangeV4Compact] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(offset) as *const RangeV4Compact,
-                        count,
-                    )
-                };
-                let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
-                let range = ranges.get(idx)?;
-                if !range.contains(ip) {
-                    return None;
-                }
-                range.profile_id as usize
-            }
-            TableDispatch::V4StandardAos { offset, count }
-            | TableDispatch::V5StandardAos { offset, count } => {
-                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
-                let ranges: &[RangeV4] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(offset) as *const RangeV4,
-                        count,
-                    )
-                };
-                let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
-                let range = ranges.get(idx)?;
-                if !range.contains(ip) {
-                    return None;
-                }
-                range.profile_id as usize
-            }
-            TableDispatch::Empty => return None,
-        };
-
+        let (_, _, profile_id) = self.lookup_raw_v4(ip)?;
         let profiles = self.profiles();
         profiles.get(profile_id).map(|p| p.country_code())
     }
@@ -1364,186 +1188,42 @@ impl IpAtlasReader {
         self.lookup_flags(ip).is_some_and(|f| f.is_datacenter())
     }
 
-    /// Fast-path lookup returning the raw normalized 20-byte [`ProfileV4`] metadata profile
+    /// Fast-path lookup returning the raw normalized 20-byte [`ProfileGen4`] metadata profile
     /// for an IPv4 address without resolving any strings or performing allocations.
     #[inline]
-    pub fn lookup_profile_u32(&self, ip: u32) -> Option<&ProfileV4> {
-        let profile_id = match self.dispatch {
-            TableDispatch::V4StandardSoa {
-                ip_from_off,
-                ip_to_off,
-                prof_off,
-                count,
-            }
-            | TableDispatch::V5StandardSoa {
-                ip_from_off,
-                ip_to_off,
-                prof_off,
-                count,
-            } => {
-                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
-                let ip_froms: &[u32] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(ip_from_off) as *const u32,
-                        count,
-                    )
-                };
-                let idx = match ip_froms.binary_search(&ip) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
-                let tos: &[u32] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(ip_to_off) as *const u32,
-                        count,
-                    )
-                };
-                let ip_to = *tos.get(idx)?;
-                if ip > ip_to {
-                    return None;
-                }
-                let prof_ids: &[u32] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(prof_off) as *const u32,
-                        count,
-                    )
-                };
-                *prof_ids.get(idx)? as usize
-            }
-            TableDispatch::V4CompactSoa {
-                ip_from_off,
-                counts_off,
-                prof_off,
-                count,
-            }
-            | TableDispatch::V5CompactSoa {
-                ip_from_off,
-                counts_off,
-                prof_off,
-                count,
-            } => {
-                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
-                let ip_froms: &[u32] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(ip_from_off) as *const u32,
-                        count,
-                    )
-                };
-                let idx = match ip_froms.binary_search(&ip) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
-                let ip_from = ip_froms[idx];
-                let counts: &[u16] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(counts_off) as *const u16,
-                        count,
-                    )
-                };
-                let count_val = *counts.get(idx)?;
-                if ip > ip_from.saturating_add(count_val as u32) {
-                    return None;
-                }
-                let prof_ids: &[u16] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(prof_off) as *const u16,
-                        count,
-                    )
-                };
-                *prof_ids.get(idx)? as usize
-            }
-            TableDispatch::V4CompactAos { offset, count }
-            | TableDispatch::V5CompactAos { offset, count } => {
-                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
-                let ranges: &[RangeV4Compact] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(offset) as *const RangeV4Compact,
-                        count,
-                    )
-                };
-                let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
-                let range = ranges.get(idx)?;
-                if !range.contains(ip) {
-                    return None;
-                }
-                range.profile_id as usize
-            }
-            TableDispatch::V4StandardAos { offset, count }
-            | TableDispatch::V5StandardAos { offset, count } => {
-                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
-                let ranges: &[RangeV4] = unsafe {
-                    std::slice::from_raw_parts(
-                        self.mmap.as_ptr().add(offset) as *const RangeV4,
-                        count,
-                    )
-                };
-                let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
-                let range = ranges.get(idx)?;
-                if !range.contains(ip) {
-                    return None;
-                }
-                range.profile_id as usize
-            }
-            TableDispatch::Empty => return None,
-        };
-
+    pub fn lookup_profile_u32(&self, ip: u32) -> Option<&ProfileGen4> {
+        let (_, _, profile_id) = self.lookup_raw_v4(ip)?;
         let profiles = self.profiles();
         profiles.get(profile_id)
     }
 
-    /// Fast-path lookup returning the raw normalized 20-byte [`ProfileV4`] metadata profile
+    /// Fast-path lookup returning the raw normalized 20-byte [`ProfileGen4`] metadata profile
     /// for an IPv6 128-bit address.
     #[inline]
-    pub fn lookup_profile_u128(&self, ip: u128) -> Option<&ProfileV4> {
-        let ranges = self.ranges_v6();
-        if ranges.is_empty() {
-            return None;
-        }
-
-        let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
-            Ok(i) => i,
-            Err(0) => return None,
-            Err(i) => i - 1,
-        };
-        let range = ranges.get(idx)?;
-        if !range.contains(ip) {
-            return None;
-        }
+    pub fn lookup_profile_u128(&self, ip: u128) -> Option<&ProfileGen4> {
+        let (_, _, profile_id) = self.lookup_raw_v6(ip)?;
         let profiles = self.profiles();
-        profiles.get(range.profile_id as usize)
+        profiles.get(profile_id)
     }
 
-    /// Fast-path lookup returning the raw [`ProfileV4`] metadata profile for an `IpAddr`.
+    /// Fast-path lookup returning the raw [`ProfileGen4`] metadata profile for an `IpAddr`.
     #[inline]
-    pub fn lookup_profile_addr(&self, ip: IpAddr) -> Option<&ProfileV4> {
+    pub fn lookup_profile_addr(&self, ip: IpAddr) -> Option<&ProfileGen4> {
         match ip {
             IpAddr::V4(v4) => self.lookup_profile_u32(u32::from(v4)),
             IpAddr::V6(v6) => {
-                let ip_u128 = u128::from(v6);
-                if let Some(prof) = self.lookup_profile_u128(ip_u128) {
-                    Some(prof)
-                } else if let Some(v4) = v6.to_ipv4_mapped() {
+                if let Some(v4) = v6.to_ipv4_mapped() {
                     self.lookup_profile_u32(u32::from(v4))
                 } else {
-                    None
+                    self.lookup_profile_u128(u128::from(v6))
                 }
             }
         }
     }
 
-    /// Fast-path lookup returning the raw [`ProfileV4`] metadata profile for an IP address.
+    /// Fast-path lookup returning the raw [`ProfileGen4`] metadata profile for an IP address.
     #[inline(always)]
-    pub fn lookup_profile(&self, ip: impl Into<IpAddr>) -> Option<&ProfileV4> {
+    pub fn lookup_profile(&self, ip: impl Into<IpAddr>) -> Option<&ProfileGen4> {
         self.lookup_profile_addr(ip.into())
     }
 }

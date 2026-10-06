@@ -8,10 +8,12 @@ use zerocopy::IntoBytes;
 
 use crate::compiler::sweep::{MergedEntry, MergedEntryV6};
 use crate::models::{
-    Crc32, HeaderV5, OptimizationConfig, ProfileV4, RangeV4, RangeV4Compact, RangeV6, RecordFamily,
-    StorageLayout, HEADER_FLAG_EMBEDDED_ZSTD, HEADER_SIZE_V5, MAGIC, PROFILE_SIZE_V4,
-    RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD, RECORD_SIZE_V6, VERSION_V5_COMPACT_AOS,
-    VERSION_V5_COMPACT_SOA, VERSION_V5_STANDARD_AOS, VERSION_V5_STANDARD_SOA,
+    Crc32, HeaderGen5, Ipv4Range, Ipv4RangeCompact, Ipv6Range, Ipv6RangeSplit64,
+    OptimizationConfig, ProfileGen4, RecordFamily, StorageLayout, HEADER_FLAG_EMBEDDED_ZSTD,
+    HEADER_SIZE_GEN5, MAGIC, PROFILE_SIZE_GEN4, RECORD_SIZE_IPV4_COMPACT,
+    RECORD_SIZE_IPV4_STANDARD, RECORD_SIZE_IPV6_COMPACT, RECORD_SIZE_IPV6_STANDARD,
+    VERSION_V5_COMPACT_AOS, VERSION_V5_COMPACT_SOA, VERSION_V5_STANDARD_AOS,
+    VERSION_V5_STANDARD_SOA,
 };
 
 #[derive(Default)]
@@ -90,16 +92,21 @@ pub struct CompilationStats {
 }
 
 enum RangeStorage {
-    Standard(Vec<RangeV4>),
-    Compact(Vec<RangeV4Compact>),
+    Standard(Vec<Ipv4Range>),
+    Compact(Vec<Ipv4RangeCompact>),
+}
+
+enum RangeStorageV6 {
+    Standard(Vec<Ipv6Range>),
+    Compact(Vec<Ipv6RangeSplit64>),
 }
 
 pub struct DatabaseWriter {
     storage: RangeStorage,
-    ranges_v6: Vec<RangeV6>,
+    storage_v6: RangeStorageV6,
     original_records: usize,
-    profiles: Vec<ProfileV4>,
-    profile_map: HashMap<ProfileV4, u32>,
+    profiles: Vec<ProfileGen4>,
+    profile_map: HashMap<ProfileGen4, u32>,
     cities: StringPool,
     regions: StringPool,
     isps: StringPool,
@@ -115,10 +122,17 @@ impl DatabaseWriter {
         } else {
             RangeStorage::Standard(Vec::new())
         };
+        // IPv6 Split-64 (16B) is lossy/over-approximating on sub-/64 spans and requires explicit opt-in (opt.split64_v6).
+        // By default, IPv6 ranges remain lossless Standard (36B) even under compact IPv4 family.
+        let storage_v6 = if opt.split64_v6 {
+            RangeStorageV6::Compact(Vec::new())
+        } else {
+            RangeStorageV6::Standard(Vec::new())
+        };
 
         Self {
             storage,
-            ranges_v6: Vec::new(),
+            storage_v6,
             original_records: 0,
             profiles: Vec::new(),
             profile_map: HashMap::new(),
@@ -138,7 +152,7 @@ impl DatabaseWriter {
     }
 
     #[inline]
-    fn get_or_create_profile(&mut self, prof: ProfileV4) -> u32 {
+    fn get_or_create_profile(&mut self, prof: ProfileGen4) -> u32 {
         if self.opt.dedup_profiles {
             if let Some(&id) = self.profile_map.get(&prof) {
                 id
@@ -159,7 +173,7 @@ impl DatabaseWriter {
     pub fn ingest_all<I: Iterator<Item = MergedEntry>>(&mut self, entries: I) {
         for entry in entries {
             self.original_records += 1;
-            let prof = ProfileV4::new(
+            let prof = ProfileGen4::new(
                 entry.city_idx,
                 entry.asn,
                 entry.country,
@@ -180,7 +194,7 @@ impl DatabaseWriter {
                     ));
                     let mut std_vec = Vec::with_capacity(vec.len() + 1);
                     for r in vec.drain(..) {
-                        std_vec.push(RangeV4::new(r.ip_from, r.ip_to(), r.profile_id as u32));
+                        std_vec.push(Ipv4Range::new(r.ip_from, r.ip_to(), r.profile_id as u32));
                     }
                     self.storage = RangeStorage::Standard(std_vec);
                 }
@@ -188,7 +202,7 @@ impl DatabaseWriter {
 
             match &mut self.storage {
                 RangeStorage::Standard(vec) => {
-                    vec.push(RangeV4::new(entry.ip_from, entry.ip_to, profile_id));
+                    vec.push(Ipv4Range::new(entry.ip_from, entry.ip_to, profile_id));
                 }
                 RangeStorage::Compact(vec) => {
                     crate::compiler::adapters::CompactRangePacker::pack_span(
@@ -206,7 +220,7 @@ impl DatabaseWriter {
     pub fn ingest_all_v6<I: Iterator<Item = MergedEntryV6>>(&mut self, entries: I) {
         for entry in entries {
             self.original_records += 1;
-            let prof = ProfileV4::new(
+            let prof = ProfileGen4::new(
                 entry.city_idx,
                 entry.asn,
                 entry.country,
@@ -218,8 +232,19 @@ impl DatabaseWriter {
             );
             let profile_id = self.get_or_create_profile(prof);
 
-            self.ranges_v6
-                .push(RangeV6::new(entry.ip_from, entry.ip_to, profile_id));
+            match &mut self.storage_v6 {
+                RangeStorageV6::Standard(vec) => {
+                    vec.push(Ipv6Range::new(entry.ip_from, entry.ip_to, profile_id));
+                }
+                RangeStorageV6::Compact(vec) => {
+                    crate::compiler::adapters::Split64RangePacker::pack_span(
+                        entry.ip_from,
+                        entry.ip_to,
+                        profile_id,
+                        vec,
+                    );
+                }
+            }
         }
     }
 
@@ -235,20 +260,28 @@ impl DatabaseWriter {
         }
 
         let is_compact = matches!(self.storage, RangeStorage::Compact(_));
+        let is_compact_v6 = matches!(self.storage_v6, RangeStorageV6::Compact(_));
         let is_soa = self.opt.layout == StorageLayout::Soa;
         let total_records_v4 = match &self.storage {
             RangeStorage::Standard(vec) => vec.len() as u32,
             RangeStorage::Compact(vec) => vec.len() as u32,
         };
-        let total_records_v6 = self.ranges_v6.len() as u32;
+        let total_records_v6 = match &self.storage_v6 {
+            RangeStorageV6::Standard(vec) => vec.len() as u32,
+            RangeStorageV6::Compact(vec) => vec.len() as u32,
+        };
         let profile_count = self.profiles.len() as u32;
 
         let record_size_v4 = if is_compact {
-            RECORD_SIZE_V4_COMPACT
+            RECORD_SIZE_IPV4_COMPACT
         } else {
-            RECORD_SIZE_V4_STANDARD
+            RECORD_SIZE_IPV4_STANDARD
         };
-        let record_size_v6 = RECORD_SIZE_V6;
+        let record_size_v6 = if is_compact_v6 {
+            RECORD_SIZE_IPV6_COMPACT
+        } else {
+            RECORD_SIZE_IPV6_STANDARD
+        };
 
         let version = match (is_compact, is_soa) {
             (true, true) => VERSION_V5_COMPACT_SOA,
@@ -259,9 +292,9 @@ impl DatabaseWriter {
 
         let records_v4_bytes = (total_records_v4 as usize) * (record_size_v4 as usize);
         let records_v6_bytes = (total_records_v6 as usize) * (record_size_v6 as usize);
-        let prof_size = (profile_count as usize) * PROFILE_SIZE_V4;
+        let prof_size = (profile_count as usize) * PROFILE_SIZE_GEN4;
 
-        let prof_offset = (HEADER_SIZE_V5 + records_v4_bytes + records_v6_bytes) as u32;
+        let prof_offset = (HEADER_SIZE_GEN5 + records_v4_bytes + records_v6_bytes) as u32;
         let c_idx_off = prof_offset + prof_size as u32;
         let c_idx_len = (self.cities.offsets.len() * 4) as u32;
         let c_data_off = c_idx_off + c_idx_len;
@@ -277,7 +310,7 @@ impl DatabaseWriter {
         let i_data_off = i_idx_off + i_idx_len;
         let i_data_len = self.isps.blob.len() as u32;
 
-        let mut header = HeaderV5 {
+        let mut header = HeaderGen5 {
             magic: MAGIC,
             version,
             total_records_v4,
@@ -363,8 +396,17 @@ impl DatabaseWriter {
                         }
                     }
                 }
-                for r in &self.ranges_v6 {
-                    payload.extend_from_slice(r.as_bytes());
+                match &self.storage_v6 {
+                    RangeStorageV6::Standard(vec) => {
+                        for r in vec {
+                            payload.extend_from_slice(r.as_bytes());
+                        }
+                    }
+                    RangeStorageV6::Compact(vec) => {
+                        for r in vec {
+                            payload.extend_from_slice(r.as_bytes());
+                        }
+                    }
                 }
                 for p in &self.profiles {
                     payload.extend_from_slice(p.as_bytes());
@@ -461,10 +503,21 @@ impl DatabaseWriter {
                 }
 
                 // Write and CRC IPv6 ranges
-                for r in &self.ranges_v6 {
-                    let bytes = r.as_bytes();
-                    crc.update(bytes);
-                    writer.write_all(bytes)?;
+                match &self.storage_v6 {
+                    RangeStorageV6::Standard(vec) => {
+                        for r in vec {
+                            let bytes = r.as_bytes();
+                            crc.update(bytes);
+                            writer.write_all(bytes)?;
+                        }
+                    }
+                    RangeStorageV6::Compact(vec) => {
+                        for r in vec {
+                            let bytes = r.as_bytes();
+                            crc.update(bytes);
+                            writer.write_all(bytes)?;
+                        }
+                    }
                 }
 
                 // Write and CRC profiles

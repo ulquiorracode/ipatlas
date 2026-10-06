@@ -8,7 +8,7 @@ This document establishes the official legal and data compliance framework for t
 
 A core tenet of the IPAtlas project is the strict boundary between **code** and **data**:
 
-```
+```text
 +-------------------------------------------------------+
 |                 IPAtlas Engine                        |
 |   License: MIT License                                |
@@ -39,15 +39,18 @@ A core tenet of the IPAtlas project is the strict boundary between **code** and 
 When compiling from [IP2Location LITE](https://lite.ip2location.com/) CSV databases (e.g., DB1 LITE, DB11 LITE, PX1 LITE, PX11 LITE):
 
 ### Terms & Requirements
+
 - **License**: Creative Commons Attribution-ShareAlike 4.0 International ([CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)).
 - **Mandatory Attribution**: You **must** provide clear attribution in your application, website, documentation, or about dialog.
 
 ### Recommended Attribution Notice
+
 ```text
 This site or product includes IP2Location LITE data available from https://lite.ip2location.com.
 ```
 
 ### Redistribution Constraints
+
 - If you redistribute or publish raw `.atlas` files compiled from IP2Location LITE data, the resulting dataset remains subject to CC BY-SA 4.0.
 - If you build an API service or SaaS product using IPAtlas internally, you do not need to share your proprietary backend code, but you must still provide the attribution notice mentioned above.
 
@@ -68,6 +71,7 @@ When utilizing commercial feeds (e.g., IP2Location Commercial DB, MaxMind GeoIP2
 IPAtlas is architected with modern data protection regulations in mind:
 
 ### Zero Personally Identifiable Information (Zero PII)
+
 - IPAtlas databases contain **network intervals and regional/city metadata**, not individual user identifiers.
 - It stores **coarse geospatial coordinates** (city/region centroid level) rather than precise GPS coordinates of households.
 - **Lossy Quantization (`-O lossy-coords`)**:
@@ -75,6 +79,7 @@ IPAtlas is architected with modern data protection regulations in mind:
   - Explicitly eliminates any potential inference of micro-locations while shrinking database footprint.
 
 ### In-Memory Mmap & Sovereign Processing
+
 - **No Remote Telemetry**: IPAtlas performs 100% offline, local memory-mapped lookups. Zero network calls, zero tracking telemetry, and zero third-party dependencies are triggered during lookups.
 - **Data Residency**: All lookups occur entirely within your own compute boundary (bare metal, private VPC, or sovereign cloud).
 

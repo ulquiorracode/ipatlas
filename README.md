@@ -50,21 +50,22 @@ GeoIP and threat intelligence datasets (e.g. MaxMind MMDB, IP2Location, IP2Proxy
 
 1. **Streaming 1D-Sweep Offline Compiler**: Merges disjoint datasets in a single $O(N + M)$ linear pass, resolving overlaps into contiguous intervals.
 2. **Zero-Copy Memory-Mapped Flat Storage**: Slices verified and referenced directly from kernel page cache via `zerocopy` and `memmap2` without self-referential pointers or heap allocations.
-3. **Sub-100ns Lookups**: Delivers **60.9 ns** hot-L1 latency and **140 ns** cold DRAM access—**up to 50x faster than MaxMind MMDB**.
+3. **Sub-100ns Fast Path & 5-6x Full-Record Speedup**: Delivers **17.3 ns** flags-only / **68.7 ns** hot-L1 latency, and **193–205 ns** full-record DRAM access—**5.4x to 12.9x faster than MaxMind MMDB**.
 
 ---
 
 ## Features
 
-- **Sub-100ns Lookups**: Benchmarked at **60.9 ns** hot cache and **~140 ns** cold/random DRAM access on standard modern CPUs.
+- **Sub-100ns Fast-Path & ~200ns Full Lookups**: Benchmarked at **17.3 ns** flags-only, **68.7 ns** hot-L1 cache, and **193–205 ns** cold random DRAM access on 5.3M production datasets.
 - **100% Sound Safe Zero-Copy Kernel Mmap**: Slices verified and referenced directly from kernel page cache via `zerocopy` and `memmap2` without self-referential `unsafe` pointers.
 - **Three-Dimensional Architecture**:
   - **Presets & Feature Masks**: Strip unneeded metadata to collapse intervals on the fly.
   - **Optimization Levels (`-O`)**: Semantic rules for cascade interval coalescing, string normalization, and symmetric coordinate quantization.
-  - **Generation V4/V5 Layout Tiers**:
-    - **V4-Standard (12B)**: `RangeV4` (`from: u32, to: u32, prof_id: u32`), universal 32-bit profile indexing.
-    - **V4-Compact (8B)**: `RangeV4Compact` (`from: u32, count: u16, prof_id: u16`), 8 records per 64B cache line (-32.4% size).
-    - **V5-Succinct (Elias-Fano)**: Compressed monotone bitvectors reaching ~100% of theoretical Shannon entropy floor.
+  - **Container Generation & Layout Tiers**:
+    - **IPv4 Standard (12B)**: `Ipv4Range` (`from: u32, to: u32, profile_id: u32`), universal 32-bit profile indexing.
+    - **IPv4 Compact (8B)**: `Ipv4RangeCompact` (`from: u32, count: u16, profile_id: u16`), 8 records per 64B cache line (-32.4% size).
+    - **IPv6 Split-64 Compact (16B)**: `Ipv6RangeSplit64` (`from_hi: u64, count_hi: u32, profile_id: u32`), 4 records per 64B cache line with 0% straddling (-55.6% size).
+    - **Gen5 Succinct (Elias-Fano)**: Compressed monotone bitvectors reaching ~100% of theoretical Shannon entropy floor.
 - **Streaming 1D-Sweep Compiler**: Single $O(N + M)$ streaming sweep merging IP2Location and IP2Proxy without loading whole input CSVs into RAM.
 - **Zero-Data-Loss Guarantee**: Preserves disjoint threat ranges occurring outside IP2Location Geo coverage.
 - **Universal Dataset Support**: Dynamic column detection for all IP2Location (`DB1`, `DB3`, `DB5`, `DB11`) and IP2Proxy (`PX1` – `PX12`) formats.
@@ -77,30 +78,33 @@ GeoIP and threat intelligence datasets (e.g. MaxMind MMDB, IP2Location, IP2Proxy
 
 ## Architecture
 
+IPAtlas is engineered as a zero-copy, cache-aligned database engine with strict separation between offline $O(N + M)$ compilation, kernel page-mapped zero-copy runtime, and compile-time monomorphic request pipelines.
+
 ```text
-ipatlas/
-├── models/                         # Domain binary value objects and layouts
-│   ├── header.rs                   # Database container header (magic, flags, CRC32)
-│   ├── range.rs                    # 12B Standard, 8B Compact, and 36B IPv6 structs
-│   ├── profile.rs                  # 32B deduplicated metadata profiles
-│   ├── flags.rs                    # Granular threat bitmask (VPN, Tor, Botnet, Datacenter)
-│   └── crc.rs                      # CRC32 data integrity verification
-├── compiler/                       # Offline data synthesis and transformation engine
-│   ├── sweep.rs                    # 1D streaming sweep line algorithm
-│   ├── adapters.rs                 # Optimization pipeline (-O1..-O3)
-│   ├── format_detector.rs          # Dynamic schema recognition for IP2Location & IP2Proxy
-│   ├── presets.rs                  # Declarative presets (All, Firewall, Country, Compact)
-│   └── succinct.rs                 # Elias-Fano succinct monotone sequence encoder
-├── reader/                         # Production sub-microsecond query runtime
-│   ├── reader.rs                   # Zero-copy memory-mapped search engine
-│   ├── succinct.rs                 # Compressed monotone bitvector binary search
-│   └── decompressor.rs             # Lazy profile decompression for embedded Zstd
-├── pipeline/                       # High-performance U-cycle execution pipeline
-│   ├── pipeline.rs                 # stitch-rs state machine (Intent -> Context -> Outcome)
-│   ├── bogon.rs                    # L1-resident sub-nanosecond RFC1918 filter
-│   └── policy.rs                   # Security policy enforcement (VPN/Proxy rejection)
-└── main.rs                         # CLI frontend (build, inspect, query, benchmark)
+       Input Feeds (IP2Location DB + IP2Proxy PX)
+                          │
+                          ▼
+            [ Streaming 1D Sweep-Line ] ──► Dual Cursor Merging ($O(N + M)$)
+                          │
+                          ▼
+            [ Normalization & Deduplication ] ──► String Blobs & Profile Table
+                          │
+                          ▼
+             [ Flat Binary Container (.bin) ]
+            ┌─────────────┬──────────────────┐
+            │   Header    │  Magic + Offsets │
+            │  IPv4 Table │  8B / 12B Ranges │
+            │  IPv6 Table │  16B / 36B Ranges│
+            │  Profiles   │  20B ProfileGen4 │
+            │  Strings    │  UTF-8 Blob Pool │
+            └─────────────┴──────────────────┘
+                          │
+                          ▼
+               [ Zero-Copy mmap Runtime ] ──► Sub-100ns Binary / Eytzinger Search
 ```
+
+> **Formal Taxonomy & Invariants**:
+> For the complete architectural specification, modular source code layout, and formal taxonomy matrix distinguishing container generations (`Gen4`, `Gen5`) from network protocol spaces (`Ipv4`, `Ipv6`), consult [**`ARCHITECTURE.md`**](ARCHITECTURE.md).
 
 ---
 
@@ -108,18 +112,19 @@ ipatlas/
 
 IPAtlas provides distinct layout tiers designed around the trade-off between memory footprint, zero-copy alignment, and hardware cache efficiency:
 
-| Layout Tier | Status | Record Size | 5.3M Table RAM | Shannon Ratio | 5.3M Full Snapshot Latency | 10k L1-Fit Latency | Multi-Thread Throughput (16T) | Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$) | vs MaxMind MMDB |
+| Layout Tier | Status | Record Size | 5.3M Table RAM | Shannon Ratio | 5.3M Full Snapshot Latency | 10k L1-Fit Latency | Multi-Thread Throughput-Eq (16T) | Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$) | vs MaxMind MMDB |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **MaxMind MMDB** *(Baseline)* | Industry Standard | ~22 bytes (tree) | **115.0 MB** | $6.50 \times H_{\text{raw}}$ | **1,100 ns** *(DRAM)* | N/A | ~5.8M QPS | **$126,500\text{ MB}\cdot\text{ns}$** (1.0x baseline) | Reference |
 | **`V4/V5-Standard (AoS)`** | **Production** | 12 bytes | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **218.4 ns** *(DRAM)* | **66.7 ns** | ~48.2M QPS | **$13,344\text{ MB}\cdot\text{ns}$** | **9.5x more efficient** |
-| **`V4/V5-Compact (AoS)`** | **Production** | 8 bytes | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **205.2 ns** *(DRAM)* | **67.3 ns** | **62.8M QPS** | **$8,474\text{ MB}\cdot\text{ns}$** | **14.9x more efficient** |
-| **`V4/V5-Compact (SoA)`** (`--layout soa`) | **Production (Opt)** | 8 bytes (columnar) | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **193.0 ns** *(DRAM)* | **60.3 ns** *(15.4ns warm)* | **64.6M QPS** | **$7,970\text{ MB}\cdot\text{ns}$** | **15.9x more efficient** |
-| **Flags-Only Fast Path** | **Production** | Zero-allocation | N/A | N/A | **85.3 ns** *(DRAM)* | **16.9 ns** | **120.0M+ QPS** | N/A | **Edge Firewall Mode** |
-| **`V5-Succinct`** *(Shannon Bound)* | **Experimental** *(Non-Prod)* | ~2.8 bytes (E-F) | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** *(DRAM)* | **297.7 ns** | N/A | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
+| **`V4/V5-Compact (AoS)`** | **Production** | 8 bytes | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **205.2 ns** *(DRAM)* | **68.7 ns** | **62.8M QPS** | **$8,474\text{ MB}\cdot\text{ns}$** | **14.9x more efficient** |
+| **`V4/V5-Compact (SoA)`** (`--layout soa`) | **Production (Opt)** | 8 bytes (columnar) | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **193.0 ns** *(DRAM)* | **69.4 ns** *(15.9ns flags)* | **64.6M QPS** | **$7,970\text{ MB}\cdot\text{ns}$** | **15.9x more efficient** |
+| **Flags-Only Fast Path** | **Production** | Zero-allocation | N/A | N/A | **85.3 ns** *(DRAM)* | **17.3 ns** | **120.0M+ QPS** | N/A | **Edge Firewall Mode** |
+| **`V5-Succinct`** *(Shannon Bound)* | **Experimental** *(Non-Prod)* | ~2.8 bytes (E-F) | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** *(DRAM)* | **331.7 ns** | N/A | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
 
 > **Comprehensive Analysis**: For in-depth empirical testbed analysis, cache-line breakdown, and detailed Criterion traces, see [**`docs/BENCHMARKS.md`**](docs/BENCHMARKS.md).
 >
 > **Methodology & L1 Cache-Fit vs DRAM Reality**:
+>
 > - **5.3M Full Snapshot**: Lookups across the complete 5,318,878 production database (41–61 MB). At this scale, the 21.3 MB search key column exceeds the CPU L1/L2 cache and memory bus round-trips ($t_{\text{CAS}}$) bound binary search latency (~193–205 ns single-threaded). SoA yields a steady ~6% single-threaded improvement and scales to **64.5M QPS** across 16 threads.
 > - **10k L1-Fit Synthetic Regime**: In microbenchmarks where the entire range table fits within 32 KB L1d / L2 cache, binary search achieves **15.4–17.0 ns** without touching DRAM.
 > - **Flags-Only & Threat Predicates**: Bypasses string table resolution and heap allocation entirely, delivering **85.3 ns on 5.3M DRAM** and **16.1–16.9 ns in L1 cache**.
@@ -209,6 +214,12 @@ ipatlas compile --mode full \
   --proxy-v6 IP2PROXY-LITE-PX10.IPV6.CSV \
   -o ipatlas_full.bin
 
+# Dual-Stack Opt-in Lossy IPv6 Split-64 (-55.6% RAM, 4 records per 64B cache line):
+ipatlas compile --mode full \\
+  --geo DB5.CSV --proxy PX10.CSV \\
+  --geo-v6 DB5.IPV6.CSV --proxy-v6 PX10.IPV6.CSV \\
+  --split64-v6 -o ipatlas_split64.bin
+
 # Fast Preset Compilation (Cascade Coalescing):
 # - firewall: Country + ASN + Threat flags (~7.9 MB binary)
 ipatlas compile --preset firewall --geo DB5.CSV --proxy PX10.CSV -o ipatlas_firewall.bin
@@ -274,7 +285,7 @@ Add IPAtlas to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ipatlas = { version = "0.8.0", default-features = false }
+ipatlas = { version = "0.11.0", default-features = false }
 ```
 
 ### Basic Zero-Allocation Lookup
@@ -283,7 +294,10 @@ ipatlas = { version = "0.8.0", default-features = false }
 use ipatlas::IpAtlasReader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Fast zero-copy open (validates header & slice bounds in nanoseconds):
     let reader = IpAtlasReader::open("ipatlas_full.bin")?;
+    // (Optional) Full CRC32 checksum verification:
+    // let reader = IpAtlasReader::open_verified("ipatlas_full.bin")?;
 
     // Warm up OS page cache for low cold-start latency:
     reader.warmup();
@@ -317,7 +331,10 @@ use ipatlas::pipeline::{IpAtlasPipelineExt, LookupContext, LookupIntent};
 use ipatlas::IpAtlasReader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Fast zero-copy open (validates header & slice bounds in nanoseconds):
     let reader = IpAtlasReader::open("ipatlas_full.bin")?;
+    // (Optional) Full CRC32 checksum verification:
+    // let reader = IpAtlasReader::open_verified("ipatlas_full.bin")?;
     let mut ctx = LookupContext::default();
 
     // 1. Bogon short-circuit: 127.0.0.1 terminates on descent in ~1.5 ns without mmap/disk lookup

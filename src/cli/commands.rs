@@ -61,6 +61,10 @@ pub fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
         opt_config.embedded_zstd = true;
     }
 
+    if args.split64_v6 {
+        opt_config.split64_v6 = true;
+    }
+
     for opt_arg in &args.optimization {
         opt_config
             .parse_arg(opt_arg)

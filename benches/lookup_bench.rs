@@ -63,12 +63,23 @@ fn bench_lookups(c: &mut Criterion) {
     let target_ip: Ipv4Addr = "1.0.1.50".parse().unwrap();
     let target_u32 = u32::from(target_ip);
 
-    // Generate 1024 realistic random pseudo-random IPs (hits & misses) to defeat L1 cache & branch predictor
+    // 1. Generate 1024 realistic random IPs sampled from valid intervals (true hits)
+    // to measure production non-cached hit latency including profile & string decoding.
     let mut ip_seed: u32 = 0x12345678;
-    let mut random_ips = Vec::with_capacity(1024);
+    let mut random_hit_ips = Vec::with_capacity(1024);
     for _ in 0..1024 {
         ip_seed = ip_seed.wrapping_mul(1664525).wrapping_add(1013904223);
-        random_ips.push(ip_seed);
+        // Map seed into valid database interval space: [16_777_216 .. 16_777_216 + 10_000 * 256)
+        let offset = (ip_seed as usize) % (10_000 * 256);
+        random_hit_ips.push(16_777_216 + offset as u32);
+    }
+
+    // 2. Generate 1024 arbitrary random IPs across full u32 space (mostly misses)
+    let mut random_miss_ips = Vec::with_capacity(1024);
+    for _ in 0..1024 {
+        ip_seed = ip_seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        // Force high range > 200.0.0.0 outside test DB to test pure miss path
+        random_miss_ips.push(3_355_443_200 + (ip_seed % 10_000_000));
     }
 
     let mut group = c.benchmark_group("lookup");
@@ -81,12 +92,23 @@ fn bench_lookups(c: &mut Criterion) {
         });
     });
 
-    // 2. Realistic random lookup (DRAM/L2/L3 cache misses)
-    let mut idx = 0;
+    // 2a. Realistic random hit lookup (cache-miss binary search + profile resolution)
+    let mut hit_idx = 0;
+    group.bench_function("random_hit_lookup_u32", |b| {
+        b.iter(|| {
+            let ip = random_hit_ips[hit_idx % random_hit_ips.len()];
+            hit_idx = hit_idx.wrapping_add(1);
+            let res = reader.lookup_u32(black_box(ip));
+            black_box(res)
+        });
+    });
+
+    // 2b. Realistic random miss lookup (pure binary search key probe returning None)
+    let mut miss_idx = 0;
     group.bench_function("random_cache_miss_lookup_u32", |b| {
         b.iter(|| {
-            let ip = random_ips[idx % random_ips.len()];
-            idx = idx.wrapping_add(1);
+            let ip = random_miss_ips[miss_idx % random_miss_ips.len()];
+            miss_idx = miss_idx.wrapping_add(1);
             let res = reader.lookup_u32(black_box(ip));
             black_box(res)
         });
@@ -108,7 +130,7 @@ fn bench_lookups(c: &mut Criterion) {
         });
     });
 
-    // 3c. Profile-only fast path (Returns raw 20B ProfileV4 without string resolution)
+    // 3c. Profile-only fast path (Returns raw 20B ProfileGen4 without string resolution)
     group.bench_function("profile_only_lookup_u32", |b| {
         b.iter(|| {
             let res = reader_compact.lookup_profile_u32(black_box(target_u32));
@@ -135,13 +157,13 @@ fn bench_lookups(c: &mut Criterion) {
     // 5. Experimental V5-Succinct Elias-Fano Bitvector lookup
     let succinct_table = {
         use ipatlas::compiler::succinct::SuccinctIntervalTable;
-        use ipatlas::models::{ProfileV4, RangeV4};
-        let ranges: Vec<RangeV4> = reader
-            .ranges()
+        use ipatlas::models::{Ipv4Range, ProfileGen4};
+        let ranges: Vec<Ipv4Range> = reader
+            .ranges_ipv4()
             .iter()
-            .map(|r| RangeV4::new(r.ip_from, r.ip_to, r.profile_id))
+            .map(|r| Ipv4Range::new(r.ip_from, r.ip_to, r.profile_id))
             .collect();
-        let profiles: Vec<ProfileV4> = reader.profiles().to_vec();
+        let profiles: Vec<ProfileGen4> = reader.profiles().to_vec();
         SuccinctIntervalTable::build(&ranges, profiles)
     };
 
@@ -258,7 +280,7 @@ fn bench_lookups(c: &mut Criterion) {
         });
     });
 
-    // 8. IPv6 Dual-Stack (128-bit) Evaluation (36B RangeV6)
+    // 8. IPv6 Dual-Stack (128-bit) Evaluation (36B Ipv6Range)
     let (_dir_v6, bin_path_v6) = {
         let dir = tempdir().unwrap();
         let geo_v6_path = dir.path().join("bench_v6_geo.csv");
@@ -270,8 +292,8 @@ fn bench_lookups(c: &mut Criterion) {
 
         let base_v6: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0000;
         for i in 0..10_000u128 {
-            let ip_from = base_v6 + (i * 65536);
-            let ip_to = ip_from + 65535;
+            let ip_from = base_v6 + (i << 64);
+            let ip_to = ip_from | 0xffff_ffff_ffff_ffff;
 
             writeln!(
                 geo_f,
@@ -298,7 +320,7 @@ fn bench_lookups(c: &mut Criterion) {
         (dir, out_v6_bin)
     };
     let reader_v6 = IpAtlasReader::open(&bin_path_v6).unwrap();
-    let target_v6: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0000 + (5000 * 65536) + 10;
+    let target_v6: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0000 + (5000 << 64) + 0x1234;
 
     group.bench_function("ipv6_standard_lookup_u128", |b| {
         b.iter(|| {
@@ -317,6 +339,112 @@ fn bench_lookups(c: &mut Criterion) {
     group.bench_function("ipv6_profile_lookup_u128", |b| {
         b.iter(|| {
             let res = reader_v6.lookup_profile_u128(black_box(target_v6));
+            black_box(res)
+        });
+    });
+
+    // 9. IPv6 Split-64 Compact (16B Ipv6RangeSplit64) Evaluation
+    let (_dir_v6_cmp, bin_path_v6_cmp) = {
+        let dir = tempdir().unwrap();
+        let geo_v6_path = dir.path().join("bench_v6_cmp_geo.csv");
+        let px_v6_path = dir.path().join("bench_v6_cmp_px.csv");
+        let out_v6_bin = dir.path().join("bench_v6_cmp.bin");
+
+        let mut geo_f = File::create(&geo_v6_path).unwrap();
+        let mut px_f = File::create(&px_v6_path).unwrap();
+
+        let base_v6: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0000;
+        for i in 0..10_000u128 {
+            let ip_from = base_v6 + (i << 64);
+            let ip_to = ip_from | 0xffff_ffff_ffff_ffff;
+
+            writeln!(
+                geo_f,
+                "{},{},US,United States,CA,Los Angeles,34.05,-118.24",
+                ip_from, ip_to
+            )
+            .unwrap();
+
+            if i % 4 == 0 {
+                writeln!(
+                    px_f,
+                    "{},{},VPN,US,United States,CA,Los Angeles,Cloud Provider,host.com,DCH,13335,AS_NAME,2026-01-01,VPN",
+                    ip_from, ip_to
+                )
+                .unwrap();
+            }
+        }
+
+        let opt = ipatlas::OptimizationConfig {
+            family: ipatlas::RecordFamily::Compact,
+            split64_v6: true,
+            ..Default::default()
+        };
+
+        let opts = CompilerOptions::new(&out_v6_bin)
+            .geo_v6(Some(&geo_v6_path))
+            .proxy_v6(Some(&px_v6_path))
+            .optimization(opt);
+
+        compile(opts).unwrap();
+        (dir, out_v6_bin)
+    };
+    let reader_v6_cmp = IpAtlasReader::open(&bin_path_v6_cmp).unwrap();
+    let target_v6_cmp: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0000 + (5000 << 64) + 0x1234;
+
+    group.bench_function("ipv6_split64_compact_lookup_u128", |b| {
+        b.iter(|| {
+            let res = reader_v6_cmp.lookup_u128(black_box(target_v6_cmp));
+            black_box(res)
+        });
+    });
+
+    group.bench_function("ipv6_split64_flags_lookup_u128", |b| {
+        b.iter(|| {
+            let res = reader_v6_cmp.lookup_flags_u128(black_box(target_v6_cmp));
+            black_box(res)
+        });
+    });
+
+    group.bench_function("ipv6_split64_profile_lookup_u128", |b| {
+        b.iter(|| {
+            let res = reader_v6_cmp.lookup_profile_u128(black_box(target_v6_cmp));
+            black_box(res)
+        });
+    });
+
+    // 10. Branchless Eytzinger Array BFS Search Evaluation
+    let eytzinger_v4 = {
+        let raw_v4 = reader_compact.ranges_ipv4_compact();
+        let mut ey = vec![ipatlas::models::Ipv4RangeCompact::default(); raw_v4.len() + 1];
+        ipatlas::compiler::eytzinger::EytzingerSearch::build_eytzinger(raw_v4, &mut ey);
+        ey
+    };
+
+    group.bench_function("eytzinger_branchless_lookup_u32", |b| {
+        b.iter(|| {
+            let res = ipatlas::compiler::eytzinger::EytzingerSearch::search_v4_compact(
+                &eytzinger_v4,
+                black_box(target_u32),
+            );
+            black_box(res)
+        });
+    });
+
+    let eytzinger_v6 = {
+        let raw_v6 = reader_v6_cmp.ranges_ipv6_compact();
+        let mut ey = vec![ipatlas::models::Ipv6RangeSplit64::default(); raw_v6.len() + 1];
+        ipatlas::compiler::eytzinger::EytzingerSearch::build_eytzinger(raw_v6, &mut ey);
+        ey
+    };
+    let target_v6_hi = (target_v6_cmp >> 64) as u64;
+
+    group.bench_function("eytzinger_branchless_lookup_v6_u64", |b| {
+        b.iter(|| {
+            let res = ipatlas::compiler::eytzinger::EytzingerSearch::search_v6_split64(
+                &eytzinger_v6,
+                black_box(target_v6_hi),
+            );
             black_box(res)
         });
     });

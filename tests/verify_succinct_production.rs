@@ -1,5 +1,5 @@
 use ipatlas::compiler::succinct::SuccinctIntervalTable;
-use ipatlas::models::{ProfileV4, RangeV4};
+use ipatlas::models::{Ipv4Range, ProfileGen4};
 use ipatlas::IpAtlasReader;
 
 #[test]
@@ -22,21 +22,21 @@ fn test_verify_production_succinct() -> Result<(), Box<dyn std::error::Error>> {
         original_file_size as f64 / (1024.0 * 1024.0)
     );
 
-    let ranges: Vec<RangeV4> = if reader.is_compact() {
+    let ranges: Vec<Ipv4Range> = if reader.is_compact() {
         reader
-            .ranges_compact()
+            .ranges_ipv4_compact()
             .iter()
-            .map(|r| RangeV4::new(r.ip_from, r.ip_to(), r.profile_id as u32))
+            .map(|r| Ipv4Range::new(r.ip_from, r.ip_to(), r.profile_id as u32))
             .collect()
     } else {
         reader
-            .ranges()
+            .ranges_ipv4()
             .iter()
-            .map(|r| RangeV4::new(r.ip_from, r.ip_to, r.profile_id))
+            .map(|r| Ipv4Range::new(r.ip_from, r.ip_to, r.profile_id))
             .collect()
     };
 
-    let profiles: Vec<ProfileV4> = reader.profiles().to_vec();
+    let profiles: Vec<ProfileGen4> = reader.profiles().to_vec();
 
     println!("Constructing Quasi-Succinct Elias-Fano Bitvector Table (5,318,878 intervals)...");
     let table = SuccinctIntervalTable::build(&ranges, profiles);

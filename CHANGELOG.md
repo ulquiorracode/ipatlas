@@ -6,6 +6,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-10-06
+
+### Added
+
+- **CRC32 Pre-Flight Verification Constructor (open_verified**:
+  - Added explicit IpAtlasReader::open_verified() constructor that computes and verifies CRC32 checksums upon opening Generation V5 containers.
+  - Keeps standard IpAtlasReader::open() strictly zero-copy and header-only (nanosecond opening time) without forcing I/O-intensive checksum validation by default.
+
+### Refactored
+
+- **Core Query Dispatch Consolidation**:
+  - Unified IPv4 binary search logic across all 8 TableDispatch variants into a single canonical lookup_raw_v4(&self, ip: u32) -> Option<(u32, u32, usize)> in mmap_reader.rs.
+  - Converted lookup_u32, lookup_flags_u32, lookup_country_code_u32, and lookup_profile_u32 into thin, zero-cost projections over lookup_raw_v4, eliminating over 300 lines of duplicated binary search logic and preventing branch divergence.
+
+### Fixed
+
+- **Memory Soundness in Packed IPv6 Structures**:
+  - Implemented safe, unaligned copy accessors (ip_from(), ip_to(), profile_id()) using ddr_of!(...).read_unaligned() on #[repr(C, packed)] struct Ipv6Range.
+  - Completely eliminated unaligned pointer reference warnings and potential UB during binary search and bounds checks in mmap_reader.rs.
+- **IPv4-Mapped IPv6 Lookup Ordering**:
+  - Hot-path optimization in lookup_addr: check ::ffff:0:0/96 prefix via  o_ipv4_mapped() first, avoiding ~23 cold binary search misses across the IPv6 table for IPv4-mapped addresses.
+- **Truth-in-Benchmarking & Metric Clarity**:
+  - Re-labeled multi-threaded batch throughput in CLI benchmarks (src/cli/bench.rs) to explicit Throughput-Eq (ns/query) to avoid conflating aggregate throughput (/\text{QPS}$) with single-query latency.
+  - Separated true interval hit-path benchmarking from miss-path testing in Criterion suites (enches/lookup_bench.rs).
+
+### Documentation
+
+- **Roadmap Realignment**:
+  - Realined ROADMAP.md: formalized 0.11.0 as Hardening, Truth-in-Benchmarking & Core Hygiene release, while shifting ecosystem web framework drop-in integrations to 0.12.0.
+
+## [0.10.0] - 2026-10-05
+
+### Added
+
+- **IPv6 Split-64 Opt-In Lossy Compression (`Ipv6RangeSplit64`)**:
+  - Implemented 16-byte `/64` compact record format (`ip_from_hi: u64`, `count_hi: u32`, `profile_id: u32`) packing 4 entries per 64-byte CPU cache line with zero straddling (-55.6% memory footprint vs 36-byte records).
+  - Explicit lossy opt-in contract via `--split64-v6` / `-O split64-v6` (`OptimizationConfig::split64_v6 = true`), keeping lossless 36-byte `Ipv6Range` as the safe default for IPv6 even when `--family compact` is specified.
+  - Documented over-approximation contract on sub-`/64` intervals and added verification tests for boundary guarantees.
+- **Empirical IPv6 Microbenchmarks (Intel Core i9-11900H)**:
+  - Documented comprehensive Criterion metrics in `docs/BENCHMARKS.md`:
+    - `ipv6_standard_lookup_u128` (36B, lossless): **64.96 ns**
+    - `ipv6_flags_lookup_u128` (36B, flags only): **12.99 ns** (~76.9M QPS)
+    - `ipv6_profile_lookup_u128` (36B, profile direct): **12.47 ns** (~80.1M QPS)
+    - `ipv6_split64_flags_lookup_u128` (16B, flags only): **16.92 ns** (~59.1M QPS)
+    - `ipv6_split64_profile_lookup_u128` (16B, profile direct): **17.09 ns** (~58.5M QPS)
+- **Experimental Branchless Eytzinger BFS Layout**:
+  - Added cache-friendly Eytzinger array layout and search in benchmarks (`compiler::eytzinger`) with `_mm_prefetch`, clocking **13.55 ns** (IPv4) and **15.64 ns** (IPv6).
+- **Web Framework Integration Guide**:
+  - Added [`docs/INTEGRATION_GUIDE.md`](docs/INTEGRATION_GUIDE.md) providing battle-tested recipes for Axum (`Extension`), Actix-Web, Tower middleware, and zero-downtime hot reloading with `arc-swap`.
+
+### Refactored
+
+- **Uncompromising Generation and Protocol Taxonomy**:
+  - Decoupled container format generations from IP protocol families across all domain models:
+    - `RangeV4` -> `Ipv4Range`, `RangeV4Compact` -> `Ipv4RangeCompact`
+    - `RangeV6` -> `Ipv6Range`, `Ipv6RangeSplit64`
+    - `ProfileV4` -> `ProfileGen4`
+    - `HeaderV4` -> `HeaderGen4`, `HeaderV5` -> `HeaderGen5`
+    - Version constants renamed to `VERSION_GEN4_*` and `VERSION_GEN5_*`.
+- **Pre-Release Version Bump**:
+  - Bumped crate version to `0.10.0`.
+
 ## [0.9.1] - 2026-10-05
 
 ### Added

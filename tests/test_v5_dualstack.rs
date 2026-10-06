@@ -97,6 +97,26 @@ fn test_v5_dualstack_compilation_and_lookup() {
 
     // Miss lookup
     assert!(reader.lookup_str("2001:db8::2000").is_none());
+
+    // 5. Test IPv4-mapped IPv6 Address Lookup (::ffff:1.0.1.5)
+    // Verifies fast-path bit-test routing without cold-probing v6 table.
+    let mapped_rec = reader
+        .lookup_str("::ffff:1.0.1.5")
+        .expect("IPv4-mapped IPv6 lookup failed");
+    assert!(!mapped_rec.is_v6);
+    assert_eq!(mapped_rec.country, "US");
+    assert_eq!(mapped_rec.city, "Los Angeles");
+    assert!(mapped_rec.flags.is_vpn());
+
+    let mapped_flags = reader
+        .lookup_flags("::ffff:1.0.1.5".parse::<std::net::IpAddr>().unwrap())
+        .expect("IPv4-mapped flags lookup failed");
+    assert!(mapped_flags.is_vpn());
+
+    let mapped_prof = reader
+        .lookup_profile("::ffff:1.0.1.5".parse::<std::net::IpAddr>().unwrap())
+        .expect("IPv4-mapped profile lookup failed");
+    assert_eq!(mapped_prof.country_code(), "US");
 }
 
 #[test]
@@ -184,4 +204,188 @@ fn test_legacy_v4_flags_conversion() {
     assert!(v4_threats.is_botnet());
     assert!(v4_threats.is_spam());
     assert!(!v4_threats.is_proxy());
+}
+
+#[test]
+fn test_v5_ipv6_split64_compact_compilation_and_lookup() {
+    let dir = tempdir().unwrap();
+
+    let u128_from_1: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0000;
+    let u128_to_1: u128 = 0x2001_0db8_0000_0000_ffff_ffff_ffff_ffff; // /64
+
+    let u128_from_2: u128 = 0x2607_f8b0_4005_0800_0000_0000_0000_0000;
+    let u128_to_2: u128 = 0x2607_f8b0_4005_0803_ffff_ffff_ffff_ffff; // 4 * /64
+
+    let geo_v6 = dir.path().join("geo_v6.csv");
+    let mut f = File::create(&geo_v6).unwrap();
+    writeln!(
+        f,
+        "\"{}\",\"{}\",\"DE\",\"Germany\",\"Hesse\",\"Frankfurt\",\"50.1109\",\"8.6821\",\"Hetrix\",\"24940\"",
+        u128_from_1, u128_to_1
+    )
+    .unwrap();
+    writeln!(
+        f,
+        "\"{}\",\"{}\",\"US\",\"United States\",\"California\",\"Mountain View\",\"37.3861\",\"-122.0839\",\"Google Cloud\",\"15169\"",
+        u128_from_2, u128_to_2
+    )
+    .unwrap();
+    drop(f);
+
+    let px_v6 = dir.path().join("px_v6.csv");
+    let mut f = File::create(&px_v6).unwrap();
+    writeln!(
+        f,
+        "\"{}\",\"{}\",\"TOR\",\"DE\",\"Germany\",\"Hesse\",\"Frankfurt\",\"Hetrix TOR\",\"domain.com\",\"DCH\",\"24940\",\"AS_HETRIX\",\"2026-01-01\",\"BOTNET\"",
+        u128_from_1, u128_to_1
+    )
+    .unwrap();
+    drop(f);
+
+    let out_compact_bin = dir.path().join("dualstack_compact_v5.bin");
+
+    // Compile with Compact family and explicit Split64 IPv6 opt-in
+    let opt = ipatlas::OptimizationConfig {
+        family: ipatlas::RecordFamily::Compact,
+        split64_v6: true,
+        ..Default::default()
+    };
+
+    let opts = CompilerOptions::new(&out_compact_bin)
+        .geo_v6(Some(&geo_v6))
+        .proxy_v6(Some(&px_v6))
+        .optimization(opt);
+
+    let stats = compile(opts).expect("V5 compact dualstack compilation failed");
+    assert_eq!(stats.records_v6, 2);
+
+    let reader =
+        IpAtlasReader::open(&out_compact_bin).expect("Failed to open compiled compact V5 database");
+    assert_eq!(reader.len_v6(), 2);
+    assert_eq!(reader.ranges_v6_compact().len(), 2);
+    assert_eq!(reader.ranges_v6().len(), 0); // Standard ranges are empty in compact mode
+
+    // Check Split-64 record properties
+    let r1 = &reader.ranges_v6_compact()[0];
+    assert_eq!(r1.ip_from_hi, (u128_from_1 >> 64) as u64);
+    assert_eq!(r1.count_hi, 0); // 1 /64 subnet (from_hi == to_hi)
+
+    let r2 = &reader.ranges_v6_compact()[1];
+    assert_eq!(r2.ip_from_hi, (u128_from_2 >> 64) as u64);
+    assert_eq!(r2.count_hi, 3); // 4 /64 subnets (difference of 3)
+
+    // Verify lookup_u128 on compact split-64
+    let rec1 = reader
+        .lookup_u128(u128_from_1 + 0x1234_5678)
+        .expect("Failed to lookup IPv6 in subnet 1");
+    assert_eq!(rec1.country, "DE");
+    assert_eq!(rec1.city, "Frankfurt");
+
+    let rec2 = reader
+        .lookup_u128(u128_to_2 - 0x10)
+        .expect("Failed to lookup IPv6 in subnet 2");
+    assert_eq!(rec2.country, "US");
+    assert_eq!(rec2.city, "Mountain View");
+
+    // Verify fast-paths on compact split-64
+    let prof = reader
+        .lookup_profile_u128(u128_from_1 + 0x55)
+        .expect("Profile lookup failed");
+    assert_eq!(prof.country_code(), "DE");
+    assert_eq!(prof.asn, 24940);
+}
+
+#[test]
+fn test_ipv6_sub_slash64_over_approximation_contract() {
+    let dir = tempdir().unwrap();
+
+    // Define a sub-/64 range: 2001:db8::10 to 2001:db8::20 (within 2001:db8::0/64)
+    let sub_from: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0010;
+    let sub_to: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0020;
+
+    let geo_v6 = dir.path().join("sub64_geo.csv");
+    let mut f = File::create(&geo_v6).unwrap();
+    writeln!(
+        f,
+        "\"{}\",\"{}\",\"FR\",\"France\",\"IDF\",\"Paris\",\"48.8566\",\"2.3522\",\"OVH\",\"16276\"",
+        sub_from, sub_to
+    )
+    .unwrap();
+    drop(f);
+
+    // 1. Standard (Lossless default) Mode:
+    // Even under Compact family (which compacts IPv4), IPv6 remains lossless Standard 36B by default!
+    let std_bin = dir.path().join("sub64_std.bin");
+    let opt_default = ipatlas::OptimizationConfig {
+        family: ipatlas::RecordFamily::Compact,
+        split64_v6: false, // default safe lossless mode
+        ..Default::default()
+    };
+    compile(
+        CompilerOptions::new(&std_bin)
+            .geo_v6(Some(&geo_v6))
+            .optimization(opt_default),
+    )
+    .expect("Standard compilation failed");
+
+    let reader_std = IpAtlasReader::open(&std_bin).unwrap();
+    assert_eq!(reader_std.ranges_v6().len(), 1);
+    assert_eq!(reader_std.ranges_v6_compact().len(), 0);
+
+    // Inside sub-range: Hit
+    assert!(reader_std.lookup_u128(sub_from).is_some());
+    assert!(reader_std.lookup_u128(sub_from + 5).is_some());
+    assert!(reader_std.lookup_u128(sub_to).is_some());
+    // Outside sub-range within the same /64: Miss (lossless precision maintained!)
+    assert!(reader_std
+        .lookup_u128(0x2001_0db8_0000_0000_0000_0000_0000_0000)
+        .is_none());
+    assert!(reader_std
+        .lookup_u128(0x2001_0db8_0000_0000_0000_0000_0000_0009)
+        .is_none());
+    assert!(reader_std
+        .lookup_u128(0x2001_0db8_0000_0000_0000_0000_0000_0021)
+        .is_none());
+    assert!(reader_std
+        .lookup_u128(0x2001_0db8_0000_0000_ffff_ffff_ffff_ffff)
+        .is_none());
+
+    // 2. Opt-in Split-64 (Lossy over-approximation) Mode:
+    let split_bin = dir.path().join("sub64_split.bin");
+    let opt_split64 = ipatlas::OptimizationConfig {
+        family: ipatlas::RecordFamily::Compact,
+        split64_v6: true, // explicit opt-in
+        ..Default::default()
+    };
+    compile(
+        CompilerOptions::new(&split_bin)
+            .geo_v6(Some(&geo_v6))
+            .optimization(opt_split64),
+    )
+    .expect("Split64 compilation failed");
+
+    let reader_split = IpAtlasReader::open(&split_bin).unwrap();
+    assert_eq!(reader_split.ranges_v6_compact().len(), 1);
+    assert_eq!(reader_split.ranges_v6().len(), 0);
+
+    // Contract: Split-64 drops the lower 64 bits and over-approximates the entire /64!
+    // Inside sub-range: Hit
+    assert!(reader_split.lookup_u128(sub_from + 5).is_some());
+    // Boundary and outside sub-range within the /64: Hits due to over-approximation contract!
+    assert!(reader_split
+        .lookup_u128(0x2001_0db8_0000_0000_0000_0000_0000_0000)
+        .is_some());
+    assert!(reader_split
+        .lookup_u128(0x2001_0db8_0000_0000_0000_0000_0000_0009)
+        .is_some());
+    assert!(reader_split
+        .lookup_u128(0x2001_0db8_0000_0000_0000_0000_0000_0021)
+        .is_some());
+    assert!(reader_split
+        .lookup_u128(0x2001_0db8_0000_0000_ffff_ffff_ffff_ffff)
+        .is_some());
+    // Different /64 prefix: Miss
+    assert!(reader_split
+        .lookup_u128(0x2001_0db8_0000_0001_0000_0000_0000_0000)
+        .is_none());
 }
