@@ -1,0 +1,21 @@
+[package]
+name = "ipatlas-cli"
+version = "0.13.0"
+edition = "2021"
+rust-version = "1.74"
+authors = ["ulquiorracode"]
+description = "High-performance CLI utility for IPAtlas database compilation, inspection, and benchmarks"
+license = "MIT"
+repository = "https://github.com/ulquiorracode/ipatlas"
+
+[dependencies]
+ipatlas-core = { path = "../../core/ipatlas-core", features = ["compiler", "hot-reload", "embedded-zstd"] }
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1.0"
+rayon = "1.10"
+tempfile = "3.17"
+zerocopy = { version = "0.8", features = ["derive"] }
+
+[[bin]]
+name = "ipatlas"
+path = "src/main.rs"

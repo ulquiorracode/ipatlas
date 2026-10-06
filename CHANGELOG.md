@@ -6,6 +6,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-10-06
+
+### Added
+
+- **Domain-Driven Cargo Workspace Reorganization**:
+  - Reorganized repository into clean domain-driven architecture matching `statefs` and `GoldSrc.rs`:
+    - `core/ipatlas-core`: Pure nanosecond zero-copy core without bloated web or C-ABI dependencies.
+    - `adapters/ipatlas-adapter-tower`: High-performance Tower `IpAtlasLayer`, `IpAtlasService`, and Axum `ClientGeo` request extractor.
+    - `adapters/ipatlas-adapter-maxmind`: Ingestion SPI adapter for MaxMind GeoLite2 City Blocks and Locations CSV datasets.
+    - `adapters/ipatlas-adapter-c`: Zero-allocation C-ABI FFI library (`cdylib` / `staticlib`) and standard C header [`include/ipatlas.h`](adapters/ipatlas-adapter-c/include/ipatlas.h).
+    - `cli/ipatlas-cli`: Modular CLI binary.
+- **Dedicated Ecosystem Integration Test Stands**:
+  - Added end-to-end Axum/Tower test stand with simulated HTTP requests and client IP header extraction (`adapters/ipatlas-adapter-tower/tests/test_tower_middleware.rs`).
+  - Added MaxMind GeoLite2 CSV ingestion test stand (`adapters/ipatlas-adapter-maxmind/tests/test_maxmind_ingestion.rs`).
+  - Added C-ABI FFI lifecycle and threat predicate test stand (`adapters/ipatlas-adapter-c/tests/test_c_abi.rs`).
+
 ## [0.12.0] - 2026-10-06
 
 ### Added

@@ -1,0 +1,16 @@
+[package]
+name = "ipatlas-adapter-maxmind"
+version = "0.13.0"
+edition = "2021"
+rust-version = "1.74"
+authors = ["ulquiorracode"]
+description = "MaxMind GeoLite2 CSV dataset ingestion SPI adapter for IPAtlas"
+license = "MIT"
+repository = "https://github.com/ulquiorracode/ipatlas"
+keywords = ["maxmind", "geolite2", "spi", "ingestion", "geoip"]
+
+[dependencies]
+ipatlas-core = { path = "../../core/ipatlas-core", features = ["compiler"] }
+
+[dev-dependencies]
+tempfile = "3.17"

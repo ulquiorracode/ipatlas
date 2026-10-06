@@ -1,0 +1,40 @@
+[package]
+name = "ipatlas-core"
+version = "0.13.0"
+edition = "2021"
+rust-version = "1.74"
+authors = ["ulquiorracode"]
+description = "Ultra-fast zero-copy binary GeoIP and Proxy/VPN threat database compiler and reader core"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/ulquiorracode/ipatlas"
+keywords = ["geoip", "proxy", "vpn", "zero-copy", "threat-intelligence"]
+categories = ["network-programming", "data-structures"]
+
+[dependencies]
+memmap2 = "0.9"
+zerocopy = { version = "0.8", features = ["derive"] }
+memchr = "2.7"
+thiserror = "2.0"
+stitch-rs = { git = "https://github.com/ulquiorracode/stitch-rs.git", rev = "30b0fe64a0eed2f41c668618b15586ed865433ac", default-features = false }
+rayon = { version = "1.10", optional = true }
+anyhow = { version = "1.0", optional = true }
+zstd = { version = "0.14.0", optional = true }
+arc-swap = { version = "1.7", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3.17"
+
+[features]
+default = ["compiler", "embedded-zstd", "hot-reload"]
+hot-reload = ["dep:arc-swap"]
+embedded-zstd = ["dep:zstd"]
+compiler = ["dep:rayon", "dep:anyhow", "embedded-zstd"]
+
+[[bench]]
+name = "lookup_bench"
+harness = false

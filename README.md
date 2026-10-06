@@ -328,8 +328,8 @@ IPAtlas integrates an optional monomorphic U-cycle execution pipeline via `stitc
 *Note*: Direct database queries (`lookup_ref`, `lookup_flags_u32`) remain the raw nanosecond hot path (**17–205 ns**); the U-cycle pipeline trades ~128 ns of additional policy latency for compile-time composable middleware, zero-allocation bogon short-circuiting, and enterprise security policy enforcement:
 
 ```rust
-use ipatlas::pipeline::{IpAtlasPipelineExt, LookupContext, LookupIntent};
-use ipatlas::IpAtlasReader;
+use ipatlas_core::pipeline::{IpAtlasPipelineExt, LookupContext, LookupIntent};
+use ipatlas_core::IpAtlasReader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Fast zero-copy open (validates header & slice bounds in nanoseconds):
@@ -352,6 +352,59 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Total lookups: {}, Bogon short-circuits: {}", ctx.dispatches, ctx.bogon_short_circuits);
     Ok(())
 }
+```
+
+---
+
+## Universal Drop-In Ecosystem Adapters
+
+IPAtlas provides first-class adapters enabling zero-boilerplate integration into external frameworks, data providers, and native languages:
+
+### 1. Axum & Tower Middleware (`adapters/ipatlas-adapter-tower`)
+
+Attach high-throughput geolocation and threat classification to any Tower or Axum web service in **2 lines of code**:
+
+```rust
+use axum::{routing::get, Router, extract::Extension};
+use ipatlas_adapter_tower::{IpAtlasLayer, ClientGeo};
+
+// 1. Attach layer to router
+let app = Router::new().route("/", get(handler)).layer(IpAtlasLayer::new(reader));
+
+// 2. Extract ClientGeo in handler
+async fn handler(Extension(geo): Extension<ClientGeo>) -> String {
+    if geo.is_threat() { return "Threat blocked".into(); }
+    format!("Hello from {}, {}!", geo.city, geo.country)
+}
+```
+
+### 2. MaxMind GeoLite2 Ingestion SPI (`adapters/ipatlas-adapter-maxmind`)
+
+Compile official MaxMind GeoLite2 City CSV releases into native IPAtlas `.bin` databases without writing converters:
+
+```rust
+use ipatlas_adapter_maxmind::MaxMindCityAdapter;
+use ipatlas_core::DatasetIngestionAdapter;
+
+let mut adapter = MaxMindCityAdapter::open("GeoLite2-City-Blocks-IPv4.csv", "GeoLite2-City-Locations-en.csv")?;
+for record in adapter.parse_v4() {
+    println!("Parsed CIDR: {}.{}.{}.{} -> {}", (record.ip_from >> 24) & 0xFF, (record.ip_from >> 16) & 0xFF, (record.ip_from >> 8) & 0xFF, record.ip_from & 0xFF, std::str::from_utf8(&record.country)?);
+}
+```
+
+### 3. C-ABI & Native FFI (`adapters/ipatlas-adapter-c`)
+
+Integrate into C, C++, Nginx, HAProxy, Envoy, Go, and Python via standard shared/static libraries (`libipatlas.so` / `ipatlas.dll`) and [`include/ipatlas.h`](adapters/ipatlas-adapter-c/include/ipatlas.h):
+
+```c
+#include "ipatlas.h"
+
+IpAtlasHandle* db = ipatlas_open("ipatlas_full.bin");
+uint32_t flags = ipatlas_lookup_flags_u32(db, 0x08080808); // 8.8.8.8
+if (ipatlas_is_threat_u32(db, 0x08080808)) {
+    // Drop packet
+}
+ipatlas_close(db);
 ```
 
 ---

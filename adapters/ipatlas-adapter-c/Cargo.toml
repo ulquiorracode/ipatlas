@@ -1,0 +1,19 @@
+[package]
+name = "ipatlas-adapter-c"
+version = "0.13.0"
+edition = "2021"
+rust-version = "1.74"
+authors = ["ulquiorracode"]
+description = "C-ABI shared and static library bindings for IPAtlas"
+license = "MIT"
+repository = "https://github.com/ulquiorracode/ipatlas"
+keywords = ["c-abi", "ffi", "cdylib", "c", "cpp"]
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+ipatlas-core = { path = "../../core/ipatlas-core" }
+
+[dev-dependencies]
+tempfile = "3.17"
