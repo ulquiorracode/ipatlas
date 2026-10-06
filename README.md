@@ -213,6 +213,12 @@ ipatlas compile --mode full \
   --proxy-v6 IP2PROXY-LITE-PX10.IPV6.CSV \
   -o ipatlas_full.bin
 
+# Dual-Stack Opt-in Lossy IPv6 Split-64 (-55.6% RAM, 4 records per 64B cache line):
+ipatlas compile --mode full \\
+  --geo DB5.CSV --proxy PX10.CSV \\
+  --geo-v6 DB5.IPV6.CSV --proxy-v6 PX10.IPV6.CSV \\
+  --split64-v6 -o ipatlas_split64.bin
+
 # Fast Preset Compilation (Cascade Coalescing):
 # - firewall: Country + ASN + Threat flags (~7.9 MB binary)
 ipatlas compile --preset firewall --geo DB5.CSV --proxy PX10.CSV -o ipatlas_firewall.bin
@@ -278,7 +284,7 @@ Add IPAtlas to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ipatlas = { version = "0.8.0", default-features = false }
+ipatlas = { version = "0.11.0", default-features = false }
 ```
 
 ### Basic Zero-Allocation Lookup
@@ -287,7 +293,10 @@ ipatlas = { version = "0.8.0", default-features = false }
 use ipatlas::IpAtlasReader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Fast zero-copy open (validates header & slice bounds in nanoseconds):
     let reader = IpAtlasReader::open("ipatlas_full.bin")?;
+    // (Optional) Full CRC32 checksum verification:
+    // let reader = IpAtlasReader::open_verified("ipatlas_full.bin")?;
 
     // Warm up OS page cache for low cold-start latency:
     reader.warmup();
@@ -321,7 +330,10 @@ use ipatlas::pipeline::{IpAtlasPipelineExt, LookupContext, LookupIntent};
 use ipatlas::IpAtlasReader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Fast zero-copy open (validates header & slice bounds in nanoseconds):
     let reader = IpAtlasReader::open("ipatlas_full.bin")?;
+    // (Optional) Full CRC32 checksum verification:
+    // let reader = IpAtlasReader::open_verified("ipatlas_full.bin")?;
     let mut ctx = LookupContext::default();
 
     // 1. Bogon short-circuit: 127.0.0.1 terminates on descent in ~1.5 ns without mmap/disk lookup
