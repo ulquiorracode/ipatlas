@@ -46,7 +46,8 @@ IPAtlas structures its physical database containers across three orthogonal dime
 | **Tier 2: `Gen4/Gen5-Compact (AoS)`** | **Production** | 8 bytes | `Ipv4RangeCompact` | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **60.9 ns** | **$2,515\text{ MB}\cdot\text{ns}$** | **50.3x more efficient** |
 | **Tier 2: `Gen4/Gen5-Compact (SoA)`** | **Production** | 8 bytes (columnar) | `soa_ip_from` + `count` + `profile` | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **15.4 ns** | **$636\text{ MB}\cdot\text{ns}$** *(Peak Hardware Sweet Spot)* | **198.8x more efficient** |
 | **Flags-Only Fast Path (SoA/AoS)** | **Production** | 0B (direct slice) | `lookup_flags_u32` (no strings) | N/A | N/A | **18.5 ns** | N/A | Edge Firewall Mode |
-| **Tier 3: `Gen5-Succinct`** | **Experimental** *(Non-Prod)* | $\sim 2.8$ bytes | Elias-Fano Bitvector | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
+| **`IPv6 Split-64 Compact`** | **Opt-in [Lossy]** | 16 bytes | `Ipv6RangeSplit64` (/64 truncation) | -55.6% v6 RAM | N/A | **80.4 ns** | N/A | Sub-/64 Over-approximation |
+| **Tier 3: `Gen5-Succinct`** | **Experimental [Bench-Only]** | $\sim 2.8$ bytes | Elias-Fano Bitvector | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
 
 ### 2.1 Benchmark Testbed & Reproduction Conditions
 
@@ -140,12 +141,12 @@ The global IPv4 table contains $N \approx 5.3 \times 10^6$ disjoint intervals in
    $$\mathbf{H_{\text{succinct}} \approx 17.8\text{ MB}}$$
    *(Exact equivalence to the theoretical Shannon limit $H_{\text{raw}}$)*.
 
-### 5.2 Retrieval Trade-off Profile
+### 5.2 Retrieval Trade-off Profile & Non-Production Status
 
-- **Status**: **Experimental** (non-production tier: not recommended for low-latency production reverse-proxies due to bit-level Rank/Select CPU cycle overhead).
+- **Status**: **Experimental [Bench-Only]** (non-production research prototype: strictly excluded from low-latency production runtimes due to bit-level Rank/Select CPU cycle overhead and branch mispredictions).
 - **Time Complexity**: $O(\log \log U)$ using $O(1)$ Rank/Select bit-index primitives.
 - **Measured Latency**: **353.8 ns** (measured via Criterion benchmark `succinct_elias_fano_lookup` vs 60.9 ns on flat compact arrays, due to bit-shifting and CPU branch misprediction overhead).
-- **Compilation Adapter**: Integrated via `compiler::succinct::SuccinctIntervalTable` prototype and `compiler::adapters`.
+- **Compilation Adapter**: Retained solely as an offline benchmark prototype via `compiler::succinct::SuccinctIntervalTable` and `compiler::adapters`.
 
 ### 5.3 Incompressibility Invariant of Succinct Streams
 

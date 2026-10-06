@@ -64,8 +64,8 @@ GeoIP and threat intelligence datasets (e.g. MaxMind MMDB, IP2Location, IP2Proxy
   - **Container Generation & Layout Tiers**:
     - **IPv4 Standard (12B)**: `Ipv4Range` (`from: u32, to: u32, profile_id: u32`), universal 32-bit profile indexing.
     - **IPv4 Compact (8B)**: `Ipv4RangeCompact` (`from: u32, count: u16, profile_id: u16`), 8 records per 64B cache line (-32.4% size).
-    - **IPv6 Split-64 Compact (16B)**: `Ipv6RangeSplit64` (`from_hi: u64, count_hi: u32, profile_id: u32`), 4 records per 64B cache line with 0% straddling (-55.6% size).
-    - **Gen5 Succinct (Elias-Fano)**: Compressed monotone bitvectors reaching ~100% of theoretical Shannon entropy floor.
+    - **IPv6 Split-64 Compact (16B, Opt-in [Lossy])**: `Ipv6RangeSplit64` (`from_hi: u64, count_hi: u32, profile_id: u32`), 4 records per 64B cache line with 0% straddling (-55.6% size, over-approximates sub-/64 intervals).
+    - **Gen5 Succinct (Experimental [Bench-Only])**: Elias-Fano compressed monotone bitvectors reaching ~100% of theoretical Shannon entropy floor (offline evaluation prototype).
 - **Streaming 1D-Sweep Compiler**: Single $O(N + M)$ streaming sweep merging IP2Location and IP2Proxy without loading whole input CSVs into RAM.
 - **Zero-Data-Loss Guarantee**: Preserves disjoint threat ranges occurring outside IP2Location Geo coverage.
 - **Universal Dataset Support**: Dynamic column detection for all IP2Location (`DB1`, `DB3`, `DB5`, `DB11`) and IP2Proxy (`PX1` – `PX12`) formats.
@@ -169,10 +169,10 @@ For the combined global IPv4 space ($2^{32} \approx 4.29 \times 10^9$ addresses)
 | Storage Layer / Format | 5.3M Production Table Size | Ratio to Shannon Limit ($H_{\text{raw}}$) | Random Access Latency (L1 / DRAM) | Architectural Rationale |
 | :--- | :--- | :--- | :--- | :--- |
 | **Raw CSV Inputs** | **~740 MB** | $41.8 \times H_{\text{raw}}$ | N/A (linear parsing) | Redundant text strings, repeated ASCII coordinates |
-| **`V4-Standard` (12B)** | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **66.6 ns / 140 ns** | 100% safe zero-copy kernel mmap, 4-byte aligned flat binary search |
-| **`V4-Compact` (8B)** | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **72.0 ns / 145 ns** | **L1/L2 cache-line tuned** (8 records / 64B cache line, -32.4% size) |
-| **`--preset firewall`** | **7.9 MB** | **$0.44 \times H_{\text{raw}}$** | **35.0 ns / 90 ns** | Sub-alphabet collapse (City/Coords discarded, adjacent ranges coalesce) |
-| **`--preset country`** | **5.6 MB** | **$0.31 \times H_{\text{raw}}$** | **25.0 ns / 75 ns** | 233x reduction via country-level interval coalescing |
+| **`V4/V5-Standard` (12B)** | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **66.7 ns / 205.2 ns** | 100% safe zero-copy kernel mmap, 4-byte aligned flat binary search |
+| **`V4/V5-Compact` (8B)** | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **68.7 ns / 193.0 ns** | **L1/L2 cache-line tuned** (8 records / 64B cache line, -32.4% size) |
+| **`--preset firewall`** | **7.9 MB** | **$0.44 \times H_{\text{raw}}$** | **17.3 ns / 85.3 ns** | Sub-alphabet collapse (City/Coords discarded, adjacent ranges coalesce) |
+| **`--preset country`** | **5.6 MB** | **$0.31 \times H_{\text{raw}}$** | **25.0 ns / 110.0 ns** | Coalesced country intervals with direct ISO code extraction |
 | **Zstandard (.zst)** | **11.5 MB** | **$0.65 \times H_{\text{raw}}$** | Compressed distribution | Asymmetric Finite State Entropy (FSE) context compression |
 
 ---
@@ -309,7 +309,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Is Datacenter: {}", flags.is_datacenter());
     }
 
-    // 2. Zero-allocation borrowed lookup (15.4 ns on SoA, 60.9 ns on AoS)
+    // 2. Zero-allocation borrowed lookup (68.7 ns hot-L1, 193-205 ns cold DRAM)
     if let Some(record) = reader.lookup_ref("1.1.1.1".parse()?) {
         println!("Country: {}", record.country);
         println!("City:    {}", record.city);
@@ -324,7 +324,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Monomorphic U-Cycle Pipeline (`stitch-rs`)
 
-IPAtlas integrates the monomorphic U-cycle execution pipeline via `stitch-rs`:
+IPAtlas integrates an optional monomorphic U-cycle execution pipeline via `stitch-rs`.
+*Note*: Direct database queries (`lookup_ref`, `lookup_flags_u32`) remain the raw nanosecond hot path (**17–205 ns**); the U-cycle pipeline trades ~128 ns of additional policy latency for compile-time composable middleware, zero-allocation bogon short-circuiting, and enterprise security policy enforcement:
 
 ```rust
 use ipatlas::pipeline::{IpAtlasPipelineExt, LookupContext, LookupIntent};

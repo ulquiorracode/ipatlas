@@ -1,9 +1,12 @@
 pub mod adapters;
 pub mod eytzinger;
 pub mod parser;
+pub mod spi;
 pub mod succinct;
 pub mod sweep;
 pub mod writer;
+
+pub use spi::{DatasetIngestionAdapter, IngestRecordV4, IngestRecordV6};
 
 use std::path::Path;
 use thiserror::Error;

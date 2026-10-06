@@ -6,11 +6,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-10-06
+
+### Added
+
+- **Zero-Downtime Hot Reloading Container (`HotReloadDatabase`)**:
+  - Implemented lock-free, atomically swappable database wrapper powered by `arc-swap`.
+  - Enables background file reloading (`reload()`, `reload_verified()`) under 5M+ QPS without dropping in-flight connections or blocking query workers.
+  - Optional feature `hot-reload` (enabled by default).
+- **Dataset Ingestion Service Provider Interface (SPI)**:
+  - Added extensible `DatasetIngestionAdapter` trait and normalized intermediate structures `IngestRecordV4` and `IngestRecordV6`.
+  - Added native CIDR parsing (`from_cidr`) for custom threat intelligence feeds and non-IP2Location data providers.
+- **Strict Error Propagation (`try_lookup_*`) & Corruption Isolation**:
+  - Distinguish genuine interval misses (`Ok(None)`) from internal corruption (`Err(ReaderError::Corrupted)`).
+  - Added `try_lookup_u32`, `try_lookup_u128`, `try_lookup_addr`, `try_lookup_ref`, `try_lookup_flags_u32`, and `try_lookup_flags_u128` to prevent edge firewalls from silently passing malicious traffic when database sectors are corrupted.
+  - String table decoding validated with `try_resolve` checking slice offsets and UTF-8 validity.
+- **Checked Compact Range Arithmetic**:
+  - Replaced `saturating_add` in compact range bound calculations with `checked_add` and `checked_ip_to`, rejecting overflowing spans rather than artificially stretching intervals across high IP space.
+- **Automated Fuzzing & Corruption Resilience Suite**:
+  - Added differential noise and systematic byte-flip fuzz testing (`tests/test_fuzz_resilience.rs`).
+  - Proves zero panics, bounds safety, and graceful error bubbling across arbitrary binary streams.
+
 ## [0.11.0] - 2026-10-06
 
 ### Added
 
-- **CRC32 Pre-Flight Verification Constructor (open_verified**:
+- **CRC32 Pre-Flight Verification Constructor (open_verified)**:
   - Added explicit IpAtlasReader::open_verified() constructor that computes and verifies CRC32 checksums upon opening Generation V5 containers.
   - Keeps standard IpAtlasReader::open() strictly zero-copy and header-only (nanosecond opening time) without forcing I/O-intensive checksum validation by default.
 
@@ -23,18 +44,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Memory Soundness in Packed IPv6 Structures**:
-  - Implemented safe, unaligned copy accessors (ip_from(), ip_to(), profile_id()) using ddr_of!(...).read_unaligned() on #[repr(C, packed)] struct Ipv6Range.
+  - Implemented safe, unaligned copy accessors (ip_from(), ip_to(), profile_id()) using `addr_of!`(...).read_unaligned() on #[repr(C, packed)] struct Ipv6Range.
   - Completely eliminated unaligned pointer reference warnings and potential UB during binary search and bounds checks in mmap_reader.rs.
 - **IPv4-Mapped IPv6 Lookup Ordering**:
   - Hot-path optimization in lookup_addr: check ::ffff:0:0/96 prefix via  o_ipv4_mapped() first, avoiding ~23 cold binary search misses across the IPv6 table for IPv4-mapped addresses.
 - **Truth-in-Benchmarking & Metric Clarity**:
   - Re-labeled multi-threaded batch throughput in CLI benchmarks (src/cli/bench.rs) to explicit Throughput-Eq (ns/query) to avoid conflating aggregate throughput (/\text{QPS}$) with single-query latency.
-  - Separated true interval hit-path benchmarking from miss-path testing in Criterion suites (enches/lookup_bench.rs).
+  - Separated true interval hit-path benchmarking from miss-path testing in Criterion suites (`benches/lookup_bench.rs`).
 
 ### Documentation
 
 - **Roadmap Realignment**:
-  - Realined ROADMAP.md: formalized 0.11.0 as Hardening, Truth-in-Benchmarking & Core Hygiene release, while shifting ecosystem web framework drop-in integrations to 0.12.0.
+  - Realined ROADMAP.md: formalized `v0.11.0` as Hardening, Truth-in-Benchmarking & Core Hygiene release, while shifting ecosystem web framework drop-in integrations to `v0.12.0`.
 
 ## [0.10.0] - 2026-10-05
 

@@ -1,6 +1,6 @@
 [package]
 name = "ipatlas"
-version = "0.11.0"
+version = "0.12.0"
 edition = "2021"
 rust-version = "1.74"
 authors = ["ulquiorracode"]
@@ -21,6 +21,7 @@ rayon = { version = "1.10", optional = true }
 clap = { version = "4.5", features = ["derive"], optional = true }
 anyhow = { version = "1.0", optional = true }
 zstd = { version = "0.14.0", optional = true }
+arc-swap = { version = "1.7", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -30,10 +31,11 @@ criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3.17"
 
 [features]
-default = ["compiler", "cli", "embedded-zstd"]
+default = ["compiler", "cli", "embedded-zstd", "hot-reload"]
+hot-reload = ["dep:arc-swap"]
 embedded-zstd = ["dep:zstd"]
 compiler = ["dep:rayon", "dep:anyhow", "embedded-zstd"]
-cli = ["compiler", "dep:clap", "dep:rayon"]
+cli = ["compiler", "dep:clap", "dep:rayon", "hot-reload"]
 
 [[bin]]
 name = "ipatlas"

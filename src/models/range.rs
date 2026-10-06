@@ -51,13 +51,21 @@ impl Ipv4RangeCompact {
     }
 
     #[inline(always)]
+    pub fn checked_ip_to(&self) -> Option<u32> {
+        self.ip_from.checked_add(self.count as u32)
+    }
+
+    #[inline(always)]
     pub fn ip_to(&self) -> u32 {
-        self.ip_from.saturating_add(self.count as u32)
+        self.checked_ip_to().unwrap_or(u32::MAX)
     }
 
     #[inline(always)]
     pub fn contains(&self, ip: u32) -> bool {
-        ip >= self.ip_from && ip <= self.ip_to()
+        match self.checked_ip_to() {
+            Some(to) => ip >= self.ip_from && ip <= to,
+            None => false, // Corrupted overflow: reject rather than silently stretching interval
+        }
     }
 }
 

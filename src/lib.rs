@@ -22,7 +22,12 @@ pub use pipeline::{
     BogonFilterLayer, IpAtlasPipelineExt, IpAtlasTerminal, LookupContext, LookupError,
     LookupIntent, LookupOutcome, TelemetryLayer, ThreatPolicyLayer,
 };
+#[cfg(feature = "hot-reload")]
+pub use reader::HotReloadDatabase;
 pub use reader::{HeaderVariant, IpAtlasReader, ReaderError};
 
 #[cfg(feature = "compiler")]
-pub use compiler::{compile, CompilationStats, CompilerError, CompilerOptions};
+pub use compiler::{
+    compile, CompilationStats, CompilerError, CompilerOptions, DatasetIngestionAdapter,
+    IngestRecordV4, IngestRecordV6,
+};
