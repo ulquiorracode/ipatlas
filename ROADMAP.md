@@ -181,6 +181,23 @@ To maintain absolute architectural honesty and avoid speculative complexity:
 
 ---
 
+## v0.13.0 — Universal Drop-In Ecosystem Adapters ✅
+
+**Goal:** Deliver 2-line drop-in adapters for web frameworks (Tower/Axum), data providers (MaxMind GeoLite2), and native foreign languages (C-ABI / FFI) in a domain-driven cargo workspace.
+
+- [x] **Domain-Driven Workspace Reorganization**:
+  - `core/ipatlas-core`: Zero-bloat core engine.
+  - `adapters/ipatlas-adapter-tower`: Tower Layer/Service & Axum `ClientGeo` request extractor.
+  - `adapters/ipatlas-adapter-maxmind`: MaxMind GeoLite2 City Blocks + Locations CSV SPI adapter.
+  - `adapters/ipatlas-adapter-c`: Native C-ABI shared/static library + `include/ipatlas.h`.
+  - `cli/ipatlas-cli`: Isolated CLI binary.
+- [x] **End-to-End Test Stands**:
+  - Axum & Tower integration test stand with HTTP request simulation and header extraction.
+  - MaxMind GeoLite2 ingestion test stand with verified CIDR block mappings.
+  - C-ABI FFI test stand with threat detection, country lookup, and lifecycle verification.
+
+---
+
 ## v1.0.0 — Production LTS & Format Freeze 📝 Planned
 
 **Goal:** Freeze binary container format specification (SemVer 1.0 guarantee), deliver official C-ABI and WASM targets, and publish 100M+ query verification traces.

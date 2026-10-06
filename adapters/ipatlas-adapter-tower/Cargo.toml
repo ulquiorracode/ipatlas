@@ -1,0 +1,22 @@
+[package]
+name = "ipatlas-adapter-tower"
+version = "0.13.0"
+edition = "2021"
+rust-version = "1.74"
+authors = ["ulquiorracode"]
+description = "Tower and Axum zero-copy geolocation and threat filtering middleware for IPAtlas"
+license = "MIT"
+repository = "https://github.com/ulquiorracode/ipatlas"
+keywords = ["tower", "axum", "middleware", "geoip", "waf"]
+
+[dependencies]
+ipatlas-core = { path = "../../core/ipatlas-core" }
+tower-layer = "0.3"
+tower-service = "0.3"
+http = "1.1"
+
+[dev-dependencies]
+axum = "0.7"
+tokio = { version = "1.37", features = ["full"] }
+tower = { version = "0.4", features = ["util"] }
+tempfile = "3.17"
