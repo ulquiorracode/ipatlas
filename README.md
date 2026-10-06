@@ -50,13 +50,13 @@ GeoIP and threat intelligence datasets (e.g. MaxMind MMDB, IP2Location, IP2Proxy
 
 1. **Streaming 1D-Sweep Offline Compiler**: Merges disjoint datasets in a single $O(N + M)$ linear pass, resolving overlaps into contiguous intervals.
 2. **Zero-Copy Memory-Mapped Flat Storage**: Slices verified and referenced directly from kernel page cache via `zerocopy` and `memmap2` without self-referential pointers or heap allocations.
-3. **Sub-100ns Lookups**: Delivers **60.9 ns** hot-L1 latency and **140 ns** cold DRAM access—**up to 50x faster than MaxMind MMDB**.
+3. **Sub-100ns Fast Path & 5-6x Full-Record Speedup**: Delivers **17.3 ns** flags-only / **68.7 ns** hot-L1 latency, and **193–205 ns** full-record DRAM access—**5.4x to 12.9x faster than MaxMind MMDB**.
 
 ---
 
 ## Features
 
-- **Sub-100ns Lookups**: Benchmarked at **60.9 ns** hot cache and **~140 ns** cold/random DRAM access on standard modern CPUs.
+- **Sub-100ns Fast-Path & ~200ns Full Lookups**: Benchmarked at **17.3 ns** flags-only, **68.7 ns** hot-L1 cache, and **193–205 ns** cold random DRAM access on 5.3M production datasets.
 - **100% Sound Safe Zero-Copy Kernel Mmap**: Slices verified and referenced directly from kernel page cache via `zerocopy` and `memmap2` without self-referential `unsafe` pointers.
 - **Three-Dimensional Architecture**:
   - **Presets & Feature Masks**: Strip unneeded metadata to collapse intervals on the fly.

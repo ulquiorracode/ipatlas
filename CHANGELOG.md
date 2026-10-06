@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.11.0] - 2026-10-06
 
+### Added
+
+- **CRC32 Pre-Flight Verification Constructor (open_verified**:
+  - Added explicit IpAtlasReader::open_verified() constructor that computes and verifies CRC32 checksums upon opening Generation V5 containers.
+  - Keeps standard IpAtlasReader::open() strictly zero-copy and header-only (nanosecond opening time) without forcing I/O-intensive checksum validation by default.
+
 ### Refactored
 
 - **Core Query Dispatch Consolidation**:

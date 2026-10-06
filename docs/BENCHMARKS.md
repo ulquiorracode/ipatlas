@@ -94,10 +94,10 @@ Evaluation of decompression latency across chunk boundaries for blocked containe
 
 | Chunk Size | Uncompressed Records (8B) | Zstd Decompression Latency | Throughput | Trade-off Analysis |
 | :--- | :--- | :--- | :--- | :--- |
-| **4 KB** | 512 records | **20.70 µs** | 148.9 MB/s | Page-aligned, excessive zstd frame overhead |
-| **16 KB** | 2,048 records | **48.69 µs** | 325.2 MB/s | Intermediate balance |
-| **64 KB** | 8,192 records | **88.09 µs** | 731.8 MB/s | **Sweet Spot**: Fits in L2, optimal framing ratio |
-| **256 KB** | 32,768 records | **88.00 µs** | 2,578 MB/s | Maximum compression ratio, higher latency penalty |
+| **4 KB** | 512 records | **20.70 µs** | **188.7 MB/s** | Page-aligned, excessive zstd frame overhead |
+| **16 KB** | 2,048 records | **48.69 µs** | **320.9 MB/s** | Intermediate balance |
+| **64 KB** | 8,192 records | **88.09 µs** | **710.2 MB/s** | **Sweet Spot**: Fits in L2, optimal framing ratio |
+| **256 KB** | 32,768 records | **88.00 µs** | **2,840.9 MB/s** | Maximum compression ratio, higher latency penalty |
 
 ---
 
