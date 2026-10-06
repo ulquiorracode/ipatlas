@@ -208,6 +208,32 @@ To prevent maintenance sprawl while maintaining the "Single Source of Truth" rul
 
 ---
 
+## v0.14.0 — Community Gaming Integration: Metamod-P & AMX Mod X Native Module 🎮 Planned (No Deadline)
+
+**Goal:** Provide zero-overhead player geolocation and threat protection for GoldSrc engine dedicated servers (Counter-Strike 1.6, Half-Life) via native Metamod and AMXX native module plugins.
+
+- [ ] **Native C-ABI Metamod Plugin (`ipatlas_mm`)**:
+  - Intercept `ClientConnect` / `ClientPutInServer` engine callbacks with zero tickrate degradation.
+  - Sub-microsecond player country extraction and proxy/VPN/botnet rejection before game slot assignment.
+- [ ] **AMX Mod X Module & Pawn Natives**:
+  - `ipatlas_get_country(id, output[], len)`
+  - `ipatlas_is_threat(id)`
+  - `ipatlas_is_proxy(id)`
+  - Direct zero-copy memory lookup without disk I/O during game ticks.
+
+---
+
+## v0.15.0 — Automated Live Feeds & Dynamic Synchronization 🔄 Planned (No Deadline)
+
+**Goal:** Deliver zero-downtime hot database updates from remote URL feeds using atomic pointer swapping.
+
+- [ ] **CLI Scheduled Feed Updater**:
+  - `ipatlas update --feed <url> --target <path> --verify-crc`: Downloads and verifies fresh feeds in the background.
+- [ ] **Sidecar Atomic Auto-Reload (`ipatlas serve --auto-reload`)**:
+  - Integrates `HotReloadDatabase` with `notify` file-watchers to atomically swap in-memory mmap containers on Kubernetes ConfigMap changes without dropping active HTTP connections.
+
+---
+
 ## v1.0.0 — Production LTS & Format Freeze 📝 Planned
 
 **Goal:** Freeze binary container format specification (SemVer 1.0 guarantee), deliver official C-ABI and WASM targets, and publish 100M+ query verification traces.

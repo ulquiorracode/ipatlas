@@ -2,6 +2,8 @@
 //!
 //! Enables applications built for `maxminddb` (GeoLite2-City / GeoIP2) to switch
 //! to IPAtlas binary databases without rewriting caller application logic.
+//!
+//! Zero memory leaks: Models own their strings without `Box::leak`.
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;
@@ -27,14 +29,14 @@ pub mod geoip2 {
     use super::*;
 
     #[derive(Serialize, Clone, Debug, Default)]
-    pub struct Country<'a> {
-        pub iso_code: Option<&'a str>,
-        pub names: Option<BTreeMap<&'a str, &'a str>>,
+    pub struct Country {
+        pub iso_code: Option<String>,
+        pub names: Option<BTreeMap<String, String>>,
     }
 
     #[derive(Serialize, Clone, Debug, Default)]
-    pub struct City<'a> {
-        pub names: Option<BTreeMap<&'a str, &'a str>>,
+    pub struct City {
+        pub names: Option<BTreeMap<String, String>>,
     }
 
     #[derive(Serialize, Clone, Debug, Default)]
@@ -44,22 +46,22 @@ pub mod geoip2 {
     }
 
     #[derive(Serialize, Clone, Debug, Default)]
-    pub struct Subdivision<'a> {
-        pub iso_code: Option<&'a str>,
-        pub names: Option<BTreeMap<&'a str, &'a str>>,
+    pub struct Subdivision {
+        pub iso_code: Option<String>,
+        pub names: Option<BTreeMap<String, String>>,
     }
 
     #[derive(Serialize, Clone, Debug, Default)]
-    pub struct CityRecord<'a> {
-        pub city: Option<City<'a>>,
-        pub country: Option<Country<'a>>,
+    pub struct CityRecord {
+        pub city: Option<City>,
+        pub country: Option<Country>,
         pub location: Option<Location>,
-        pub subdivisions: Option<Vec<Subdivision<'a>>>,
+        pub subdivisions: Option<Vec<Subdivision>>,
     }
 
     #[derive(Serialize, Clone, Debug, Default)]
-    pub struct CountryRecord<'a> {
-        pub country: Option<Country<'a>>,
+    pub struct CountryRecord {
+        pub country: Option<Country>,
     }
 }
 
@@ -75,8 +77,8 @@ impl Reader {
         Ok(Self { inner })
     }
 
-    /// Primary lookup method mirroring `reader.lookup::<geoip2::City>(ip)`.
-    pub fn lookup<'a, T: FromIpAtlasRecord<'a>>(&'a self, ip: IpAddr) -> Result<T, MaxMindDBError> {
+    /// Primary lookup method mirroring `reader.lookup::<geoip2::CityRecord>(ip)`.
+    pub fn lookup<T: FromIpAtlasRecord>(&self, ip: IpAddr) -> Result<T, MaxMindDBError> {
         match self.inner.lookup(ip) {
             Some(rec) => Ok(T::from_record(rec)),
             None => Err(MaxMindDBError::AddressNotFoundError(ip.to_string())),
@@ -85,25 +87,22 @@ impl Reader {
 }
 
 /// Conversion trait mapping IPAtlas [`GeoRecord`] into GeoIP2 models.
-pub trait FromIpAtlasRecord<'a> {
+pub trait FromIpAtlasRecord {
     fn from_record(rec: GeoRecord) -> Self;
 }
 
-impl<'a> FromIpAtlasRecord<'a> for geoip2::CityRecord<'static> {
+impl FromIpAtlasRecord for geoip2::CityRecord {
     fn from_record(rec: GeoRecord) -> Self {
         let mut country_names = BTreeMap::new();
-        country_names.insert(
-            "en",
-            Box::leak(rec.country.clone().into_boxed_str()) as &str,
-        );
+        country_names.insert("en".to_string(), rec.country.clone());
 
         let country = geoip2::Country {
-            iso_code: Some(Box::leak(rec.country.into_boxed_str())),
+            iso_code: Some(rec.country),
             names: Some(country_names),
         };
 
         let mut city_names = BTreeMap::new();
-        city_names.insert("en", Box::leak(rec.city.clone().into_boxed_str()) as &str);
+        city_names.insert("en".to_string(), rec.city);
         let city = geoip2::City {
             names: Some(city_names),
         };
@@ -114,7 +113,7 @@ impl<'a> FromIpAtlasRecord<'a> for geoip2::CityRecord<'static> {
         };
 
         let mut sub_names = BTreeMap::new();
-        sub_names.insert("en", Box::leak(rec.region.clone().into_boxed_str()) as &str);
+        sub_names.insert("en".to_string(), rec.region);
         let subdivisions = vec![geoip2::Subdivision {
             iso_code: None,
             names: Some(sub_names),
@@ -129,16 +128,13 @@ impl<'a> FromIpAtlasRecord<'a> for geoip2::CityRecord<'static> {
     }
 }
 
-impl<'a> FromIpAtlasRecord<'a> for geoip2::CountryRecord<'static> {
+impl FromIpAtlasRecord for geoip2::CountryRecord {
     fn from_record(rec: GeoRecord) -> Self {
         let mut country_names = BTreeMap::new();
-        country_names.insert(
-            "en",
-            Box::leak(rec.country.clone().into_boxed_str()) as &str,
-        );
+        country_names.insert("en".to_string(), rec.country.clone());
 
         let country = geoip2::Country {
-            iso_code: Some(Box::leak(rec.country.into_boxed_str())),
+            iso_code: Some(rec.country),
             names: Some(country_names),
         };
 

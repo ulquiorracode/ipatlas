@@ -32,5 +32,12 @@ class TestIpAtlasPython(unittest.TestCase):
             country = db.lookup_country("0.0.0.0")
             self.assertIn(country, [None, "-", "--"])
 
+    def test_invalid_and_ipv6_raises_value_error(self):
+        with IpAtlasDatabase.open(self.db_path) as db:
+            with self.assertRaises(ValueError):
+                db.lookup_country("invalid-ip")
+            with self.assertRaises(ValueError):
+                db.lookup_country("2001:4860:4860::8888")
+
 if __name__ == "__main__":
     unittest.main()

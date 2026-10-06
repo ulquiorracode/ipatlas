@@ -112,7 +112,15 @@ def _get_c_api(lib_path: Optional[str] = None) -> _IpAtlasC:
 
 def _ipv4_to_u32(ip: str) -> int:
     """Converts an IPv4 string address to 32-bit unsigned integer (host byte order)."""
-    packed = socket.inet_aton(ip)
+    if ":" in ip:
+        raise ValueError(
+            f"IPv6 address '{ip}' is not supported in the C-ABI fast path yet (IPv4 only). "
+            "Use the Rust native library or HTTP microservice for IPv6."
+        )
+    try:
+        packed = socket.inet_aton(ip)
+    except socket.error as e:
+        raise ValueError(f"Invalid IPv4 address format: '{ip}'") from e
     return struct.unpack("!I", packed)[0]
 
 

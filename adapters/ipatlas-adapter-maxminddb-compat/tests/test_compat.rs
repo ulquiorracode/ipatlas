@@ -28,18 +28,27 @@ fn test_maxminddb_compat_lookup() {
     let city_record: geoip2::CityRecord = reader.lookup(ip).unwrap();
 
     let country = city_record.country.unwrap();
-    assert_eq!(country.iso_code, Some("US"));
-    assert_eq!(country.names.unwrap().get("en"), Some(&"US"));
+    assert_eq!(country.iso_code.as_deref(), Some("US"));
+    assert_eq!(
+        country.names.unwrap().get("en").map(|s| s.as_str()),
+        Some("US")
+    );
 
     let city = city_record.city.unwrap();
-    assert_eq!(city.names.unwrap().get("en"), Some(&"Mountain View"));
+    assert_eq!(
+        city.names.unwrap().get("en").map(|s| s.as_str()),
+        Some("Mountain View")
+    );
 
     let loc = city_record.location.unwrap();
     assert!((loc.latitude.unwrap() - 37.42).abs() < 0.01);
 
     // 3. Lookup CountryRecord using maxminddb syntax
     let country_record: geoip2::CountryRecord = reader.lookup(ip).unwrap();
-    assert_eq!(country_record.country.unwrap().iso_code, Some("US"));
+    assert_eq!(
+        country_record.country.unwrap().iso_code.as_deref(),
+        Some("US")
+    );
 
     // 4. Missing IP
     let missing_ip: IpAddr = "1.2.3.4".parse().unwrap();

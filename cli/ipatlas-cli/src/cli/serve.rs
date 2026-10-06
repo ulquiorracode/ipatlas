@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -48,7 +48,6 @@ pub fn run_serve(args: ServeArgs) -> anyhow::Result<()> {
             Ok(stream) => {
                 let r = Arc::clone(&reader);
                 let m = Arc::clone(&metrics);
-                // Handle in lightweight thread or inline for low footprint
                 std::thread::spawn(move || {
                     if let Err(e) = handle_connection(stream, r, m) {
                         eprintln!("Error handling connection: {e}");
@@ -62,13 +61,30 @@ pub fn run_serve(args: ServeArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn handle_connection(
     mut stream: TcpStream,
     reader: Arc<IpAtlasReader>,
     metrics: Arc<Metrics>,
 ) -> std::io::Result<()> {
     metrics.total_requests.fetch_add(1, Ordering::Relaxed);
-    let mut reader_buf = BufReader::new(&stream);
+    // Bounded read limit (8 KB) to prevent DoS via infinite unbounded headers
+    let mut reader_buf = BufReader::new((&stream).take(8192));
     let mut request_line = String::new();
     if reader_buf.read_line(&mut request_line)? == 0 {
         return Ok(());
@@ -148,6 +164,9 @@ fn handle_connection(
         let res = reader.lookup_ref(ip_parsed);
         let elapsed_ns = t0.elapsed().as_nanos();
 
+        // Safely format parsed IP representation (prevents reflect-injection)
+        let safe_ip = ip_parsed.to_string();
+
         let body = match res {
             Some(rec) => {
                 let is_threat = rec.flags.is_threat();
@@ -156,11 +175,11 @@ fn handle_connection(
                 }
                 format!(
                     "{{\"ip\":\"{}\",\"country\":\"{}\",\"region\":\"{}\",\"city\":\"{}\",\"isp\":\"{}\",\"asn\":{},\"lat\":{:.2},\"lon\":{:.2},\"threat\":{},\"datacenter\":{},\"lookup_ns\":{}}}\n",
-                    ip_clean,
-                    rec.country,
-                    rec.region.replace('"', "\\\""),
-                    rec.city.replace('"', "\\\""),
-                    rec.isp.replace('"', "\\\""),
+                    safe_ip,
+                    json_escape(rec.country),
+                    json_escape(rec.region),
+                    json_escape(rec.city),
+                    json_escape(rec.isp),
                     rec.asn,
                     rec.latitude,
                     rec.longitude,
@@ -172,7 +191,7 @@ fn handle_connection(
             None => {
                 format!(
                     "{{\"ip\":\"{}\",\"found\":false,\"lookup_ns\":{}}}\n",
-                    ip_clean, elapsed_ns
+                    safe_ip, elapsed_ns
                 )
             }
         };
