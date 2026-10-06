@@ -83,9 +83,30 @@ impl Ipv6Range {
         }
     }
 
+    /// Soundly reads `ip_from` (u128) from packed struct without reference unaligned UB.
+    #[inline(always)]
+    pub fn ip_from(&self) -> u128 {
+        // SAFETY: Self is valid for reads; reads unaligned u128 directly from pointer.
+        unsafe { std::ptr::addr_of!(self.ip_from).read_unaligned() }
+    }
+
+    /// Soundly reads `ip_to` (u128) from packed struct without reference unaligned UB.
+    #[inline(always)]
+    pub fn ip_to(&self) -> u128 {
+        // SAFETY: Self is valid for reads; reads unaligned u128 directly from pointer.
+        unsafe { std::ptr::addr_of!(self.ip_to).read_unaligned() }
+    }
+
+    /// Soundly reads `profile_id` (u32) from packed struct without reference unaligned UB.
+    #[inline(always)]
+    pub fn profile_id(&self) -> u32 {
+        // SAFETY: Self is valid for reads; reads unaligned u32 directly from pointer.
+        unsafe { std::ptr::addr_of!(self.profile_id).read_unaligned() }
+    }
+
     #[inline(always)]
     pub fn contains(&self, ip: u128) -> bool {
-        ip >= self.ip_from && ip <= self.ip_to
+        ip >= self.ip_from() && ip <= self.ip_to()
     }
 }
 

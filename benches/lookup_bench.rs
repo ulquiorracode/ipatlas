@@ -63,12 +63,23 @@ fn bench_lookups(c: &mut Criterion) {
     let target_ip: Ipv4Addr = "1.0.1.50".parse().unwrap();
     let target_u32 = u32::from(target_ip);
 
-    // Generate 1024 realistic random pseudo-random IPs (hits & misses) to defeat L1 cache & branch predictor
+    // 1. Generate 1024 realistic random IPs sampled from valid intervals (true hits)
+    // to measure production non-cached hit latency including profile & string decoding.
     let mut ip_seed: u32 = 0x12345678;
-    let mut random_ips = Vec::with_capacity(1024);
+    let mut random_hit_ips = Vec::with_capacity(1024);
     for _ in 0..1024 {
         ip_seed = ip_seed.wrapping_mul(1664525).wrapping_add(1013904223);
-        random_ips.push(ip_seed);
+        // Map seed into valid database interval space: [16_777_216 .. 16_777_216 + 10_000 * 256)
+        let offset = (ip_seed as usize) % (10_000 * 256);
+        random_hit_ips.push(16_777_216 + offset as u32);
+    }
+
+    // 2. Generate 1024 arbitrary random IPs across full u32 space (mostly misses)
+    let mut random_miss_ips = Vec::with_capacity(1024);
+    for _ in 0..1024 {
+        ip_seed = ip_seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        // Force high range > 200.0.0.0 outside test DB to test pure miss path
+        random_miss_ips.push(3_355_443_200 + (ip_seed % 10_000_000));
     }
 
     let mut group = c.benchmark_group("lookup");
@@ -81,12 +92,23 @@ fn bench_lookups(c: &mut Criterion) {
         });
     });
 
-    // 2. Realistic random lookup (DRAM/L2/L3 cache misses)
-    let mut idx = 0;
+    // 2a. Realistic random hit lookup (cache-miss binary search + profile resolution)
+    let mut hit_idx = 0;
+    group.bench_function("random_hit_lookup_u32", |b| {
+        b.iter(|| {
+            let ip = random_hit_ips[hit_idx % random_hit_ips.len()];
+            hit_idx = hit_idx.wrapping_add(1);
+            let res = reader.lookup_u32(black_box(ip));
+            black_box(res)
+        });
+    });
+
+    // 2b. Realistic random miss lookup (pure binary search key probe returning None)
+    let mut miss_idx = 0;
     group.bench_function("random_cache_miss_lookup_u32", |b| {
         b.iter(|| {
-            let ip = random_ips[idx % random_ips.len()];
-            idx = idx.wrapping_add(1);
+            let ip = random_miss_ips[miss_idx % random_miss_ips.len()];
+            miss_idx = miss_idx.wrapping_add(1);
             let res = reader.lookup_u32(black_box(ip));
             black_box(res)
         });

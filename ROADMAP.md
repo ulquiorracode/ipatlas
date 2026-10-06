@@ -129,13 +129,37 @@
 
 ---
 
-## v0.11.0 — Ecosystem Drop-In Integrations & Fuzz-Proof Validation 📝 Planned
+## v0.11.0 — Hardening, Truth-in-Benchmarking & Core Hygiene 🚧 In Progress
+
+**Goal:** Eliminate all adversarial review findings, achieve absolute truth-in-benchmarking, ensure 100% memory soundness, and streamline core search implementations.
+
+- [ ] **Truth-in-Benchmarking & Metric Clarity**:
+  - Unambiguously separate L1-cache fit (10k) and Production DRAM (5.3M) in all documentation and benchmark tables.
+  - Explicitly label multi-threaded metrics as `throughput-equivalent (16T)` to avoid conflation with single-query latency.
+  - Fix benchmark miss-bias by testing hit-paths using real IP keys sampled from dataset intervals alongside miss-paths.
+  - Clarify Eytzinger BFS and Succinct Elias-Fano as experimental research evaluation benchmarks (not on-disk default).
+- [ ] **Core Search Consolidation (Subtract-Before-You-Add)**:
+  - Collapse 4x duplicated binary search `match TableDispatch` into unified `lookup_raw_v4(ip: u32) -> Option<usize>` helper.
+- [ ] **Memory Soundness & Undefined Behavior Elimination**:
+  - Replace unaligned field accesses in `Ipv6Range` (36B `repr(C, packed)`) with safe `read_unaligned` / struct copying.
+- [ ] **Error Propagation & Silent Corruption Guards**:
+  - Distinguish genuine cache/interval misses (`None`) from internal database corruption errors (OOB profile/string indices).
+- [ ] **Pipeline Optimization (`stitch-rs`)**:
+  - Eliminate `Instant::now()` and heap allocations (`String`) on high-throughput bogon evaluation paths.
+- [ ] **Lossy Split-64 Accuracy Disclaimer**:
+  - Enforce explicit opt-in contract and add precision notice for sub-`/64` over-approximation.
+
+---
+
+## v0.12.0 — Ecosystem Drop-In Integrations & Generic Ingestion 📝 Planned
 
 **Goal:** Turn IPAtlas into an effortless drop-in middleware for Rust web frameworks and harden mmap parsing against malicious corruption.
 
 - [ ] **Web Framework Middlewares**:
   - `ipatlas-tower` / `ipatlas-axum` crate providing plug-and-play client geolocation and threat blocking layers.
   - Zero-copy request extensions with ergonomic extractor primitives.
+- [ ] **Generic CIDR/Range Ingestion & SPI/Vendor Adapters**:
+  - Decouple vendor formats (MaxMind GeoLite2, DB-IP, custom enterprise feeds) via pluggable SPI adapters.
 - [ ] **Continuous Fuzzing Suite**:
   - `cargo-fuzz` harness targeting malformed headers, invalid string offsets, and corrupted interval tables.
 - [ ] **Thread-Safe Hot-Reload Abstraction**:

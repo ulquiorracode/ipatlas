@@ -6,6 +6,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-10-06
+
+### Refactored
+
+- **Core Query Dispatch Consolidation**:
+  - Unified IPv4 binary search logic across all 8 TableDispatch variants into a single canonical lookup_raw_v4(&self, ip: u32) -> Option<(u32, u32, usize)> in mmap_reader.rs.
+  - Converted lookup_u32, lookup_flags_u32, lookup_country_code_u32, and lookup_profile_u32 into thin, zero-cost projections over lookup_raw_v4, eliminating over 300 lines of duplicated binary search logic and preventing branch divergence.
+
+### Fixed
+
+- **Memory Soundness in Packed IPv6 Structures**:
+  - Implemented safe, unaligned copy accessors (ip_from(), ip_to(), profile_id()) using ddr_of!(...).read_unaligned() on #[repr(C, packed)] struct Ipv6Range.
+  - Completely eliminated unaligned pointer reference warnings and potential UB during binary search and bounds checks in mmap_reader.rs.
+- **IPv4-Mapped IPv6 Lookup Ordering**:
+  - Hot-path optimization in lookup_addr: check ::ffff:0:0/96 prefix via 	o_ipv4_mapped() first, avoiding ~23 cold binary search misses across the IPv6 table for IPv4-mapped addresses.
+- **Truth-in-Benchmarking & Metric Clarity**:
+  - Re-labeled multi-threaded batch throughput in CLI benchmarks (src/cli/bench.rs) to explicit Throughput-Eq (ns/query) to avoid conflating aggregate throughput (/\text{QPS}$) with single-query latency.
+  - Separated true interval hit-path benchmarking from miss-path testing in Criterion suites (enches/lookup_bench.rs).
+
+### Documentation
+
+- **Roadmap Realignment**:
+  - Realined ROADMAP.md: formalized 0.11.0 as Hardening, Truth-in-Benchmarking & Core Hygiene release, while shifting ecosystem web framework drop-in integrations to 0.12.0.
+
 ## [0.10.0] - 2026-10-05
 
 ### Added

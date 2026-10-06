@@ -138,8 +138,12 @@ pub fn run_bench(args: BenchArgs) -> anyhow::Result<()> {
         "Throughput:      {} queries/sec",
         format_num(qps_par as u64)
     );
-    println!("Average Latency: {:.1} ns/query", avg_ns_par);
-    println!("Speedup Factor:  {:.1}x", qps_par / qps);
+    println!(
+        "Throughput-Eq:   {:.1} ns/query (aggregate 1/QPS across {} threads)",
+        avg_ns_par,
+        rayon::current_num_threads()
+    );
+    println!("Throughput Gain: {:.1}x vs single-thread", qps_par / qps);
 
     // 3. stitch-rs Monomorphic U-Cycle Pipeline Benchmark
     let mut pipe_ctx = LookupContext::new();
