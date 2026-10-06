@@ -13,7 +13,7 @@
 
 ---
 
-## ⚡ 30-Second Quickstart (Zero Setup)
+## 30-Second Quickstart (Zero Setup)
 
 Try IPAtlas immediately with pre-compiled production binaries—**no dataset registration or CSV downloads required**:
 
@@ -39,7 +39,7 @@ Lookup Time: 0.07 µs (68 ns)
 
 ---
 
-## 🔌 Zero-Effort Drop-In Integrations
+## Zero-Effort Drop-In Integrations
 
 Drop IPAtlas into your existing stack in **2 lines of code**:
 
@@ -104,8 +104,8 @@ docker run -p 8080:8080 -v ./dist:/data ipatlas:latest -d /data/ipatlas_goldsrc_
 
 ## Table of Contents
 
-- [⚡ 30-Second Quickstart (Zero Setup)](#-30-second-quickstart-zero-setup)
-- [🔌 Zero-Effort Drop-In Integrations](#-zero-effort-drop-in-integrations)
+- [30-Second Quickstart (Zero Setup)](#30-second-quickstart-zero-setup)
+- [Zero-Effort Drop-In Integrations](#zero-effort-drop-in-integrations)
 - [Background](#background)
 - [Features](#features)
 - [Architecture](#architecture)

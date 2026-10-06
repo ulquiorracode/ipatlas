@@ -1,6 +1,6 @@
 # IPAtlas Roadmap
 
-## v0.4.0 — Rust Systems Engine Rewrite ✅
+## v0.4.0 — Rust Systems Engine Rewrite [Completed]
 
 **Goal:** Completely replace the Python prototype with a high-performance, memory-safe Rust implementation delivering sub-100ns query latency and streaming compilation.
 
@@ -12,7 +12,7 @@
 
 ---
 
-## v0.5.0 — Optimization Presets, Cache Alignment & Layout Tiers ✅
+## v0.5.0 — Optimization Presets, Cache Alignment & Layout Tiers [Completed]
 
 **Goal:** Introduce optimization levels, semantic coalescing, cache-aligned compact layouts, and formal Shannon entropy benchmarking.
 
@@ -31,7 +31,7 @@
 
 ---
 
-## v0.6.0 — Succinct Data Structures & Elias-Fano Encoding ✅
+## v0.6.0 — Succinct Data Structures & Elias-Fano Encoding [Completed]
 
 **Goal:** Implement succinct monotonic bitvectors reaching near-theoretical Shannon entropy limits for memory-constrained and embedded environments.
 
@@ -46,7 +46,7 @@
 
 ---
 
-## v0.7.0 — Embedded Zstandard & Pipeline Decoupling ✅
+## v0.7.0 — Embedded Zstandard & Pipeline Decoupling [Completed]
 
 **Goal:** Enable native in-container Zstd compression for compressed disk distribution without double compression overhead, decouple optional dependencies, and stabilize the supply chain.
 
@@ -65,7 +65,7 @@
 
 ---
 
-## v0.8.0 — Orthogonal Matrix, SoA Columnar Layout & Flags Fast-Path ✅
+## v0.8.0 — Orthogonal Matrix, SoA Columnar Layout & Flags Fast-Path [Completed]
 
 **Goal:** Decouple binary format dimensions into an orthogonal 3D matrix (`Generation` x `Family` x `Layout`), implement Structure of Arrays (SoA) layout for high cache utilization, and provide zero-allocation security filter APIs.
 
@@ -81,7 +81,7 @@
 
 ---
 
-## v0.9.0 — Profile-Only Fast-Path & Empirical Dual-Stack Benchmarks ✅
+## v0.9.0 — Profile-Only Fast-Path & Empirical Dual-Stack Benchmarks [Completed]
 
 **Goal:** Expose direct metadata fast-paths for stitch-rs integration, conduct empirical 128-bit IPv6 performance analysis, and implement offline AoS <-> SoA database conversion.
 
@@ -97,7 +97,7 @@
 
 ---
 
-## v0.9.1 — Modular Codebase Architecture & Data Compliance ✅
+## v0.9.1 — Modular Codebase Architecture & Data Compliance [Completed]
 
 **Goal:** Modularize internal architecture to eliminate monolithic source files, harden mmap safety boundaries, and establish official legal compliance and licensing guidelines.
 
@@ -110,7 +110,7 @@
 
 ---
 
-## v0.10.0 — IPv6 Split-64 Truncation & Branchless Eytzinger Search 📝 Planned
+## v0.10.0 — IPv6 Split-64 Truncation & Branchless Eytzinger Search [Planned]
 
 **Goal:** Eliminate 128-bit cache-line straddling, compress IPv6 entries down to 16 bytes, and introduce branchless Eytzinger array search.
 
@@ -129,7 +129,7 @@
 
 ---
 
-## v0.11.0 — Hardening, Truth-in-Benchmarking & Core Hygiene ✅
+## v0.11.0 — Hardening, Truth-in-Benchmarking & Core Hygiene [Completed]
 
 **Goal:** Eliminate all adversarial review findings, achieve absolute truth-in-benchmarking, ensure 100% memory soundness, and streamline core search implementations.
 
@@ -151,7 +151,7 @@
 
 ---
 
-## v0.12.0 — Honest Production-Ready & Ecosystem Integrations ✅
+## v0.12.0 — Honest Production-Ready & Ecosystem Integrations [Completed]
  
 **Goal:** Deliver an honest single-node production-ready library and CLI with zero silent failures on corrupted data, thread-safe hot reload, SPI ingestion, and clear boundaries between production search and experimental benchmarks.
  
@@ -181,7 +181,7 @@ To maintain absolute architectural honesty and avoid speculative complexity:
 
 ---
 
-## v0.13.0 — Universal Drop-In Ecosystem Adapters (90% Market Coverage) ✅
+## v0.13.0 — Universal Drop-In Ecosystem Adapters (90% Market Coverage) [Completed]
 
 **Goal:** Deliver zero-effort drop-in adapters and language clients for 90% of real-world production environments across Rust, Python, Go, C/Nginx, Actix, MaxMind migration, and Kubernetes/DevOps.
 
@@ -208,7 +208,7 @@ To prevent maintenance sprawl while maintaining the "Single Source of Truth" rul
 
 ---
 
-## v0.14.0 — Community Gaming Integration: Metamod-P & AMX Mod X Native Module 🎮 Planned (No Deadline)
+## v0.14.0 — Community Gaming Integration: Metamod-P & AMX Mod X Native Module [Planned (No Deadline)]
 
 **Goal:** Provide zero-overhead player geolocation and threat protection for GoldSrc engine dedicated servers (Counter-Strike 1.6, Half-Life) via native Metamod and AMXX native module plugins.
 
@@ -223,7 +223,7 @@ To prevent maintenance sprawl while maintaining the "Single Source of Truth" rul
 
 ---
 
-## v0.15.0 — Automated Live Feeds & Dynamic Synchronization 🔄 Planned (No Deadline)
+## v0.15.0 — Automated Live Feeds & Dynamic Synchronization [Planned (No Deadline)]
 
 **Goal:** Deliver zero-downtime hot database updates from remote URL feeds using atomic pointer swapping.
 
@@ -234,7 +234,7 @@ To prevent maintenance sprawl while maintaining the "Single Source of Truth" rul
 
 ---
 
-## v1.0.0 — Production LTS & Format Freeze 📝 Planned
+## v1.0.0 — Production LTS & Format Freeze [Planned]
 
 **Goal:** Freeze binary container format specification (SemVer 1.0 guarantee), deliver official C-ABI and WASM targets, and publish 100M+ query verification traces.
 
