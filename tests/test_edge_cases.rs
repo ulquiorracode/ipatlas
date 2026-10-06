@@ -104,3 +104,100 @@ fn test_empty_csv_compilation() {
     assert!(reader.lookup_str("1.1.1.1").is_none());
     assert!(reader.lookup_str("0.0.0.0").is_none());
 }
+
+#[test]
+fn test_corrupted_profile_id_returns_error() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("geo.csv");
+    let out_bin = dir.path().join("corrupted_prof.bin");
+
+    let db_content = format!(
+        "{},{},US,United States,CA,Los Angeles,34.05,-118.25\n",
+        ip_to_u32("1.2.3.0"),
+        ip_to_u32("1.2.3.255")
+    );
+    std::fs::write(&db_path, db_content).unwrap();
+
+    let opts = CompilerOptions::new(&out_bin).geo(Some(&db_path));
+    compile(opts).unwrap();
+
+    // Mutate the binary: find range record and corrupt its profile_id
+    let mut bytes = std::fs::read(&out_bin).unwrap();
+    // Default compiler generates Gen5 (header 80 bytes).
+    // Ipv4Range layout: ip_from (4), ip_to (4), profile_id (4) = 12 bytes.
+    // Byte offset 80 + 8 = 88 is profile_id. Set it to 0xFFFF (out of bounds).
+    bytes[88] = 0xFF;
+    bytes[89] = 0xFF;
+    bytes[90] = 0x00;
+    bytes[91] = 0x00;
+
+    let bad_bin = dir.path().join("bad_prof.bin");
+    std::fs::write(&bad_bin, bytes).unwrap();
+
+    let reader = IpAtlasReader::open(&bad_bin).unwrap();
+    let target_ip = ip_to_u32("1.2.3.4");
+
+    // Strict try_lookup must return Err(ReaderError::Corrupted), NOT Ok(None) or panic!
+    let res = reader.try_lookup_u32(target_ip);
+    assert!(matches!(res, Err(ReaderError::Corrupted(_))));
+
+    // Flags lookup must also return Err(ReaderError::Corrupted)
+    let res_flags = reader.try_lookup_flags_u32(target_ip);
+    assert!(matches!(res_flags, Err(ReaderError::Corrupted(_))));
+
+    // Standard lookup returns None safely (doesn't panic)
+    assert!(reader.lookup_u32(target_ip).is_none());
+    assert!(reader.lookup_flags_u32(target_ip).is_none());
+}
+
+#[test]
+fn test_compact_count_overflow_rejects() {
+    use ipatlas::Ipv4RangeCompact;
+
+    // Range with ip_from close to u32::MAX and count that overflows u32
+    let bad_range = Ipv4RangeCompact {
+        ip_from: 0xFFFF_FFF0,
+        count: 0x0020, // 0xFFFF_FFF0 + 0x20 overflows u32!
+        profile_id: 0,
+    };
+
+    assert_eq!(bad_range.checked_ip_to(), None);
+    // contains must return false on overflow rather than wrapping around to 0.0.0.x
+    assert!(!bad_range.contains(0xFFFF_FFF5));
+    assert!(!bad_range.contains(0x0000_0005));
+}
+
+#[test]
+fn test_corrupted_string_offset_returns_error() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("geo_str.csv");
+    let out_bin = dir.path().join("corrupted_str.bin");
+
+    let db_content = format!(
+        "{},{},US,United States,CA,Los Angeles,34.05,-118.25\n",
+        ip_to_u32("1.2.3.0"),
+        ip_to_u32("1.2.3.255")
+    );
+    std::fs::write(&db_path, db_content).unwrap();
+
+    let opts = CompilerOptions::new(&out_bin).geo(Some(&db_path));
+    compile(opts).unwrap();
+
+    // Mutate the binary: corrupt city_idx_off in header to point beyond file size
+    let mut bytes = std::fs::read(&out_bin).unwrap();
+    // In HeaderGen5:
+    // city_idx_off is at offset:
+    // magic (4) + version (2) + total_records_v4 (4) + record_size_v4 (2) + total_records_v6 (4) + record_size_v6 (2) + profile_count (4) + profile_offset (4) + city_count (4) = 30.
+    // city_idx_off is u32 at byte 30..34.
+    bytes[30] = 0xFF;
+    bytes[31] = 0xFF;
+    bytes[32] = 0xFF;
+    bytes[33] = 0x0F; // huge offset
+
+    let bad_bin = dir.path().join("bad_str.bin");
+    std::fs::write(&bad_bin, bytes).unwrap();
+
+    // Header validation during open will fail or try_resolve will fail
+    let open_res = IpAtlasReader::open(&bad_bin);
+    assert!(open_res.is_err());
+}

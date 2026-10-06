@@ -881,7 +881,7 @@ impl IpAtlasReader {
                     )
                 };
                 let c = *counts.get(idx)?;
-                let to = ip_from.saturating_add(c as u32);
+                let to = ip_from.checked_add(c as u32)?;
                 if ip > to {
                     return None;
                 }
@@ -937,28 +937,48 @@ impl IpAtlasReader {
         }
     }
 
-    /// Lookup an IPv4 integer returning a borrowed view `GeoRecordRef`.
+    /// Strict lookup for IPv4 distinguishing between true key absence (`Ok(None)`)
+    /// and internal database corruption / out-of-bounds metadata references (`Err(ReaderError)`).
     #[inline]
-    pub fn lookup_u32(&self, ip: u32) -> Option<GeoRecordRef<'_>> {
-        let (ip_from, ip_to, profile_id) = self.lookup_raw_v4(ip)?;
+    pub fn try_lookup_u32(&self, ip: u32) -> Result<Option<GeoRecordRef<'_>>, ReaderError> {
+        let (ip_from, ip_to, profile_id) = match self.lookup_raw_v4(ip) {
+            Some(v) => v,
+            None => return Ok(None),
+        };
 
         let profiles = self.profiles();
-        let prof = profiles.get(profile_id)?;
+        let prof = profiles.get(profile_id).ok_or(ReaderError::Corrupted(
+            "Profile ID exceeds profile table bounds",
+        ))?;
 
-        Some(GeoRecordRef {
+        let region = self
+            .regions
+            .try_resolve(&self.mmap, prof.reg_idx as usize)?;
+        let city = self
+            .cities
+            .try_resolve(&self.mmap, prof.city_idx as usize)?;
+        let isp = self.isps.try_resolve(&self.mmap, prof.isp_idx as usize)?;
+
+        Ok(Some(GeoRecordRef {
             ip: IpAddr::V4(Ipv4Addr::from(ip)),
             ip_from: ip_from as u128,
             ip_to: ip_to as u128,
             is_v6: false,
             country: prof.country_code(),
-            region: self.get_region(prof.reg_idx as usize),
-            city: self.get_city(prof.city_idx as usize),
-            isp: self.get_isp(prof.isp_idx as usize),
+            region,
+            city,
+            isp,
             asn: prof.asn,
             latitude: prof.latitude(),
             longitude: prof.longitude(),
             flags: self.decode_flags(prof.flags),
-        })
+        }))
+    }
+
+    /// Lookup an IPv4 integer returning a borrowed view `GeoRecordRef`.
+    #[inline]
+    pub fn lookup_u32(&self, ip: u32) -> Option<GeoRecordRef<'_>> {
+        self.try_lookup_u32(ip).ok().flatten()
     }
 
     #[inline(always)]
@@ -1009,45 +1029,78 @@ impl IpAtlasReader {
         }
     }
 
-    /// Lookup an IPv6 128-bit integer returning a borrowed view `GeoRecordRef`.
+    /// Strict lookup for IPv6 distinguishing between true key absence (`Ok(None)`)
+    /// and internal database corruption / out-of-bounds metadata references (`Err(ReaderError)`).
     #[inline]
-    pub fn lookup_u128(&self, ip: u128) -> Option<GeoRecordRef<'_>> {
-        let (ip_from, ip_to, profile_id) = self.lookup_raw_v6(ip)?;
+    pub fn try_lookup_u128(&self, ip: u128) -> Result<Option<GeoRecordRef<'_>>, ReaderError> {
+        let (ip_from, ip_to, profile_id) = match self.lookup_raw_v6(ip) {
+            Some(v) => v,
+            None => return Ok(None),
+        };
 
         let profiles = self.profiles();
-        let prof = profiles.get(profile_id)?;
+        let prof = profiles.get(profile_id).ok_or(ReaderError::Corrupted(
+            "Profile ID exceeds profile table bounds",
+        ))?;
 
-        Some(GeoRecordRef {
+        let region = self
+            .regions
+            .try_resolve(&self.mmap, prof.reg_idx as usize)?;
+        let city = self
+            .cities
+            .try_resolve(&self.mmap, prof.city_idx as usize)?;
+        let isp = self.isps.try_resolve(&self.mmap, prof.isp_idx as usize)?;
+
+        Ok(Some(GeoRecordRef {
             ip: IpAddr::V6(Ipv6Addr::from(ip)),
             ip_from,
             ip_to,
             is_v6: true,
             country: prof.country_code(),
-            region: self.get_region(prof.reg_idx as usize),
-            city: self.get_city(prof.city_idx as usize),
-            isp: self.get_isp(prof.isp_idx as usize),
+            region,
+            city,
+            isp,
             asn: prof.asn,
             latitude: prof.latitude(),
             longitude: prof.longitude(),
             flags: self.decode_flags(prof.flags),
-        })
+        }))
+    }
+
+    /// Lookup an IPv6 128-bit integer returning a borrowed view `GeoRecordRef`.
+    #[inline]
+    pub fn lookup_u128(&self, ip: u128) -> Option<GeoRecordRef<'_>> {
+        self.try_lookup_u128(ip).ok().flatten()
+    }
+
+    /// Strict lookup for any `IpAddr` (IPv4 or IPv6), returning `Result<Option<GeoRecordRef>, ReaderError>`.
+    #[inline]
+    pub fn try_lookup_addr(&self, ip: IpAddr) -> Result<Option<GeoRecordRef<'_>>, ReaderError> {
+        match ip {
+            IpAddr::V4(v4) => self.try_lookup_u32(u32::from(v4)),
+            IpAddr::V6(v6) => {
+                if let Some(v4) = v6.to_ipv4_mapped() {
+                    self.try_lookup_u32(u32::from(v4))
+                } else {
+                    self.try_lookup_u128(u128::from(v6))
+                }
+            }
+        }
+    }
+
+    /// Strict lookup for an IP address distinguishing between NotFound and Corrupted.
+    #[inline(always)]
+    pub fn try_lookup_ref(
+        &self,
+        ip: impl Into<IpAddr>,
+    ) -> Result<Option<GeoRecordRef<'_>>, ReaderError> {
+        self.try_lookup_addr(ip.into())
     }
 
     /// Looks up any `IpAddr` (IPv4 or IPv6), returning a borrowed view `GeoRecordRef`.
     #[inline]
     pub fn lookup_addr(&self, ip: IpAddr) -> Option<GeoRecordRef<'_>> {
-        match ip {
-            IpAddr::V4(v4) => self.lookup_u32(u32::from(v4)),
-            IpAddr::V6(v6) => {
-                // Hot-path optimization: IPv4-mapped (::ffff:0:0/96 or ::ffff:x.x.x.x) is directly
-                // routed to fast 32-bit IPv4 lookup, avoiding ~23 cold binary search probes in IPv6 table.
-                if let Some(v4) = v6.to_ipv4_mapped() {
-                    self.lookup_u32(u32::from(v4))
-                } else {
-                    self.lookup_u128(u128::from(v6))
-                }
-            }
-        }
+        self.try_lookup_addr(ip).ok().flatten()
     }
 
     /// Looks up an IP address, returning a borrowed view `GeoRecordRef`.
@@ -1113,23 +1166,45 @@ impl IpAtlasReader {
         }
     }
 
+    /// Strict fast-path lookup returning flags or `Err(ReaderError::Corrupted)` if profile_id is invalid.
+    #[inline]
+    pub fn try_lookup_flags_u32(&self, ip: u32) -> Result<Option<GeoFlags>, ReaderError> {
+        let (_, _, profile_id) = match self.lookup_raw_v4(ip) {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let profiles = self.profiles();
+        let prof = profiles.get(profile_id).ok_or(ReaderError::Corrupted(
+            "Profile ID exceeds profile table bounds",
+        ))?;
+        Ok(Some(self.decode_flags(prof.flags)))
+    }
+
     /// Fast-path lookup returning only threat/usage flags for an IPv4 address.
     /// Performs zero string resolution (`memchr`) and zero UTF-8 validation.
     #[inline]
     pub fn lookup_flags_u32(&self, ip: u32) -> Option<GeoFlags> {
-        let (_, _, profile_id) = self.lookup_raw_v4(ip)?;
+        self.try_lookup_flags_u32(ip).ok().flatten()
+    }
+
+    /// Strict fast-path lookup returning flags for IPv6 or `Err(ReaderError::Corrupted)`.
+    #[inline]
+    pub fn try_lookup_flags_u128(&self, ip: u128) -> Result<Option<GeoFlags>, ReaderError> {
+        let (_, _, profile_id) = match self.lookup_raw_v6(ip) {
+            Some(v) => v,
+            None => return Ok(None),
+        };
         let profiles = self.profiles();
-        let prof = profiles.get(profile_id)?;
-        Some(self.decode_flags(prof.flags))
+        let prof = profiles.get(profile_id).ok_or(ReaderError::Corrupted(
+            "Profile ID exceeds profile table bounds",
+        ))?;
+        Ok(Some(self.decode_flags(prof.flags)))
     }
 
     /// Fast-path lookup returning only threat/usage flags for an IPv6 address.
     #[inline]
     pub fn lookup_flags_u128(&self, ip: u128) -> Option<GeoFlags> {
-        let (_, _, profile_id) = self.lookup_raw_v6(ip)?;
-        let profiles = self.profiles();
-        let prof = profiles.get(profile_id)?;
-        Some(self.decode_flags(prof.flags))
+        self.try_lookup_flags_u128(ip).ok().flatten()
     }
 
     /// Fast-path lookup returning only threat/usage flags for an `IpAddr`.
