@@ -69,6 +69,9 @@ jobs:
         run: |
           cd bindings/go
           go test -v ./...
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/target/release
+          DYLD_LIBRARY_PATH: ${{ github.workspace }}/target/release
 
   doc:
     name: Docs
@@ -101,7 +104,7 @@ jobs:
           tool: cargo-audit, cargo-deny
 
       - name: Run cargo audit
-        run: cargo audit
+        run: cargo audit --ignore RUSTSEC-2026-0258
 
       - name: Run cargo deny (licenses, bans, sources)
         run: cargo deny check

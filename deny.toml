@@ -1,6 +1,8 @@
 [advisories]
 db-urls = ["https://github.com/RustSec/advisory-db"]
-ignore = []
+ignore = [
+    "RUSTSEC-2026-0258", # h2 unbounded empty DATA frames (transitive in actix-web 4.x / actix-http 3.x)
+]
 
 [licenses]
 allow = [
