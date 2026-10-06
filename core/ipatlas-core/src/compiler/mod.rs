@@ -165,3 +165,38 @@ pub fn compile(options: CompilerOptions<'_>) -> Result<CompilationStats, Compile
     let stats = writer.write_to_file(options.output_path)?;
     Ok(stats)
 }
+
+/// Compiles records from an arbitrary [`DatasetIngestionAdapter`] into an IPAtlas Generation V5 binary database.
+pub fn compile_adapter<A: DatasetIngestionAdapter>(
+    mut adapter: A,
+    output_path: &Path,
+    opt: OptimizationConfig,
+    features: FeatureMask,
+) -> Result<CompilationStats, CompilerError> {
+    let mut cities = StringPool::new();
+    let mut regions = StringPool::new();
+    let mut isps = StringPool::new();
+    let prune_empty = opt.prune_empty;
+
+    let mut writer = DatabaseWriter::new(opt.clone());
+
+    let (mut geo_records, mut px_records): (Vec<RawGeoRecord>, Vec<RawPxRecord>) = adapter
+        .parse_v4()
+        .map(|rec| rec.into_raw_pair(&mut cities, &mut regions, &mut isps, prune_empty))
+        .unzip();
+
+    geo_records.sort_unstable_by_key(|r| r.ip_from);
+    px_records.sort_unstable_by_key(|r| r.ip_from);
+
+    let merger = SweepLineMerger::new(
+        geo_records.into_iter(),
+        px_records.into_iter(),
+        features,
+        opt,
+    );
+    writer.ingest_all(merger);
+
+    writer.set_pools(cities, regions, isps);
+    let stats = writer.write_to_file(output_path)?;
+    Ok(stats)
+}

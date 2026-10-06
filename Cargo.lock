@@ -566,6 +566,7 @@ version = "0.13.0"
 dependencies = [
  "anyhow",
  "clap",
+ "ipatlas-adapter-maxmind",
  "ipatlas-core",
  "rayon",
  "tempfile",

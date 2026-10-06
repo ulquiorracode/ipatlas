@@ -9,12 +9,103 @@
 
 > Ultra-fast zero-copy binary GeoIP and Proxy/VPN threat database compiler and reader in Rust.
 
-**IPAtlas** is a production systems-level library and CLI tool written in Rust. It fuses disjoint Geolocation (IP2Location) and Threat/Proxy datasets (IP2Proxy) into a unified, flat binary search table designed for edge proxies, high-performance firewalls, game servers, and sub-microsecond packet filters.
+**IPAtlas** is a production systems-level library and CLI tool written in Rust. It fuses disjoint Geolocation (IP2Location / MaxMind) and Threat/Proxy datasets (IP2Proxy) into a unified, flat binary search table designed for edge proxies, high-performance firewalls, game servers, and sub-microsecond packet filters.
+
+---
+
+## ⚡ 30-Second Quickstart (Zero Setup)
+
+Try IPAtlas immediately with pre-compiled production binaries—**no dataset registration or CSV downloads required**:
+
+```bash
+# 1. Install CLI utility
+cargo install ipatlas-cli
+
+# 2. Instant lookup using pre-bundled distribution binary
+ipatlas lookup ./dist/ipatlas_goldsrc_city.bin 8.8.8.8
+```
+
+Output:
+```text
+IP:          8.8.8.8
+Range:       8.8.8.0 - 8.8.8.255
+Country:     US (United States)
+Region:      California
+City:        Mountain View
+ISP:         Google LLC (AS15169)
+Threat:      Clean (0x0000)
+Lookup Time: 0.07 µs (68 ns)
+```
+
+---
+
+## 🔌 Zero-Effort Drop-In Integrations
+
+Drop IPAtlas into your existing stack in **2 lines of code**:
+
+| Environment | Integration | Effort | Status |
+| :--- | :--- | :--- | :--- |
+| **Rust Web / Axum / Tower** | Single middleware layer: `.layer(IpAtlasLayer::new(reader))` | **30 sec** | Production Ready |
+| **MaxMind Migration** | One-command CLI compile: `ipatlas compile --maxmind-blocks ...` | **10 sec** | Production Ready |
+| **C / C++ / Nginx / Envoy** | Zero-alloc C ABI: `ipatlas_open("db.bin")` + `ipatlas_is_threat_u32(...)` | **1 min** | Production Ready |
+| **Python / Go / FFI** | Instant `ctypes` / `cgo` wrapper around shared library (`.so` / `.dll`) | **1 min** | Production Ready |
+
+### 1. Axum / Tower Web Service (Rust)
+```rust
+use axum::{routing::get, Router, extract::Extension};
+use ipatlas_adapter_tower::{IpAtlasLayer, ClientGeo};
+
+let reader = Arc::new(IpAtlasReader::open("ipatlas_goldsrc_city.bin")?);
+
+// 1. Attach layer to router
+let app = Router::new()
+    .route("/api/hello", get(|Extension(geo): Extension<ClientGeo>| async move {
+        format!("Hello from {}, {}!", geo.city, geo.country)
+    }))
+    .layer(IpAtlasLayer::new(reader).with_strict_threat_block(true));
+```
+*Read the full [Web Integration Guide](docs/INTEGRATION_GUIDE.md).*
+
+### 2. MaxMind GeoLite2 One-Command CLI Migration
+Migrate existing MaxMind GeoLite2 City CSV exports to high-speed zero-copy `.bin` with a single command:
+```bash
+ipatlas compile \
+  --maxmind-blocks GeoLite2-City-Blocks-IPv4.csv \
+  --maxmind-locations GeoLite2-City-Locations-en.csv \
+  -o ipatlas.bin
+```
+
+### 3. C, C++, Nginx & Native Daemons (C-ABI)
+```c
+#include "ipatlas.h"
+
+// 1. Open database (zero-allocation mmap)
+IpAtlasHandle* db = ipatlas_open("ipatlas.bin");
+
+// 2. Sub-20ns threat check in edge packet filter
+if (ipatlas_is_threat_u32(db, client_ip_u32)) {
+    drop_packet();
+}
+ipatlas_close(db);
+```
+
+### 4. Python via `ctypes` (No Rust toolchain needed)
+```python
+import ctypes
+
+lib = ctypes.CDLL("./libipatlas_adapter_c.so")
+db = lib.ipatlas_open(b"ipatlas_goldsrc_city.bin")
+is_threat = lib.ipatlas_is_threat_u32(db, 0x08080808)
+print("Is Threat:", bool(is_threat))
+lib.ipatlas_close(db)
+```
 
 ---
 
 ## Table of Contents
 
+- [⚡ 30-Second Quickstart (Zero Setup)](#-30-second-quickstart-zero-setup)
+- [🔌 Zero-Effort Drop-In Integrations](#-zero-effort-drop-in-integrations)
 - [Background](#background)
 - [Features](#features)
 - [Architecture](#architecture)
@@ -30,6 +121,7 @@
 - [Rust Library API](#rust-library-api)
   - [Basic Zero-Allocation Lookup](#basic-zero-allocation-lookup)
   - [Monomorphic U-Cycle Pipeline (`stitch-rs`)](#monomorphic-u-cycle-pipeline-stitch-rs)
+- [Universal Drop-In Ecosystem Adapters](#universal-drop-in-ecosystem-adapters)
 - [Maintainers](#maintainers)
 - [Contributing](#contributing)
 - [Security](#security)

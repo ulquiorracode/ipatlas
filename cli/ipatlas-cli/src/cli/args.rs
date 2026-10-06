@@ -69,6 +69,14 @@ pub struct CompileArgs {
     #[arg(long, aliases = ["px-v6", "proxy-v6"])]
     pub proxy_v6: Option<PathBuf>,
 
+    /// Path to MaxMind GeoLite2 City/Country Blocks CSV (e.g. GeoLite2-City-Blocks-IPv4.csv)
+    #[arg(long = "maxmind-blocks", alias = "mm-blocks")]
+    pub maxmind_blocks: Option<PathBuf>,
+
+    /// Path to MaxMind GeoLite2 Locations CSV (e.g. GeoLite2-City-Locations-en.csv)
+    #[arg(long = "maxmind-locations", alias = "mm-locations")]
+    pub maxmind_locations: Option<PathBuf>,
+
     /// Output binary path (.bin)
     #[arg(short = 'o', long = "out")]
     pub out: PathBuf,
