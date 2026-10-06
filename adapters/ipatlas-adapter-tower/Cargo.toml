@@ -14,6 +14,8 @@ ipatlas-core = { path = "../../core/ipatlas-core" }
 tower-layer = "0.3"
 tower-service = "0.3"
 http = "1.1"
+futures-util = "0.3"
+http-body-util = "0.1"
 
 [dev-dependencies]
 axum = "0.7"

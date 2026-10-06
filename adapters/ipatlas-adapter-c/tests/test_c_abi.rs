@@ -2,7 +2,7 @@ use std::ffi::CString;
 
 use ipatlas_adapter_c::{
     ipatlas_close, ipatlas_is_datacenter_u32, ipatlas_is_threat_u32, ipatlas_lookup_country_u32,
-    ipatlas_lookup_flags_u32, ipatlas_open,
+    ipatlas_lookup_flags_u32, ipatlas_open, ipatlas_open_verified,
 };
 use ipatlas_core::{compile, CompilerOptions};
 use tempfile::tempdir;
@@ -28,13 +28,19 @@ fn test_c_abi_end_to_end_lifecycle() {
         .proxy(Some(&px_path));
     compile(opts).unwrap();
 
-    // 1. C-ABI open
+    // 1. C-ABI open and open_verified
     let c_path = CString::new(out_bin.to_str().unwrap()).unwrap();
+    let handle_verified = unsafe { ipatlas_open_verified(c_path.as_ptr()) };
+    assert!(!handle_verified.is_null());
+    unsafe { ipatlas_close(handle_verified) };
+
     let handle = unsafe { ipatlas_open(c_path.as_ptr()) };
     assert!(!handle.is_null());
 
-    // 2. Query flags and predicates
-    let flags = unsafe { ipatlas_lookup_flags_u32(handle, ip_u32) };
+    // 2. Query flags and predicates with unambiguous return code
+    let mut flags: u32 = 0;
+    let found = unsafe { ipatlas_lookup_flags_u32(handle, ip_u32, &mut flags as *mut u32) };
+    assert_eq!(found, 1);
     assert_ne!(flags, 0);
 
     let is_dch = unsafe { ipatlas_is_datacenter_u32(handle, ip_u32) };
@@ -53,6 +59,12 @@ fn test_c_abi_end_to_end_lifecycle() {
     assert_eq!(country_str, "US");
 
     // 4. Query non-existent IP
+    let mut flags_missing: u32 = 999;
+    let found_missing =
+        unsafe { ipatlas_lookup_flags_u32(handle, 0x09090909, &mut flags_missing as *mut u32) };
+    assert_eq!(found_missing, 0);
+    assert_eq!(flags_missing, 0);
+
     let res_none =
         unsafe { ipatlas_lookup_country_u32(handle, 0x09090909, country_buf.as_mut_ptr()) };
     assert_eq!(res_none, 0);

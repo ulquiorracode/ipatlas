@@ -31,6 +31,9 @@ impl MaxMindCityAdapter {
         blocks_csv: impl AsRef<Path>,
         locations_csv: impl AsRef<Path>,
     ) -> Result<Self, std::io::Error> {
+        // Validate blocks file existence and accessibility upfront to prevent silent empty iteration
+        let _ = File::open(blocks_csv.as_ref())?;
+
         let loc_file = File::open(locations_csv)?;
         let reader = BufReader::new(loc_file);
         let mut locations = HashMap::new();

@@ -40,3 +40,17 @@ network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,
     assert_eq!(&r2.country, b"FR");
     assert_eq!(r2.city.as_deref(), Some("Paris"));
 }
+
+#[test]
+fn test_maxmind_adapter_missing_file_returns_err() {
+    let dir = tempdir().unwrap();
+    let missing_blocks = dir.path().join("non_existent_blocks.csv");
+    let locations_csv = dir.path().join("locations.csv");
+    std::fs::write(&locations_csv, "geoname_id,...\n").unwrap();
+
+    let res = MaxMindCityAdapter::open(&missing_blocks, &locations_csv);
+    assert!(
+        res.is_err(),
+        "Opening non-existent blocks file must fail with io::Error"
+    );
+}
