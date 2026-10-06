@@ -4,11 +4,13 @@ import (
 	"net"
 	"testing"
 
-	"ipatlas"
+	"github.com/ulquiorracode/ipatlas/bindings/go/ipatlas"
 )
 
 func TestGoBinding(t *testing.T) {
-	db, err := ipatlas.Open("../../../dist/ipatlas_goldsrc_city.bin")
+	var db *ipatlas.Database
+	var err error
+	db, err = ipatlas.Open("../../../dist/ipatlas_goldsrc_city.bin")
 	if err != nil {
 		t.Skip("Sample database not found, skipping Go test")
 		return

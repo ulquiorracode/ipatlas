@@ -86,9 +86,11 @@ with IpAtlasDatabase.open("ipatlas_goldsrc_city.bin") as db:
 ```go
 import "github.com/ulquiorracode/ipatlas/bindings/go/ipatlas"
 
-db, _ := ipatlas.Open("ipatlas_goldsrc_city.bin")
+var db *ipatlas.Database
+db, _ = ipatlas.Open("ipatlas_goldsrc_city.bin")
 defer db.Close()
-country, _ := db.LookupCountry(net.ParseIP("8.8.8.8"))
+
+country, ok := db.LookupCountry(net.ParseIP("8.8.8.8"))
 ```
 
 ### 5. Kubernetes Sidecar & Prometheus Telemetry
