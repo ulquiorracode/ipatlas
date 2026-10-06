@@ -6,6 +6,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-10-06
+
+### Added
+
+- **Zero-Downtime Hot Reloading Container (HotReloadDatabase)**:
+  - Implemented lock-free, atomically swappable database wrapper powered by rc-swap.
+  - Enables background file reloading (
+eload(), 
+eload_verified()) under 5M+ QPS without dropping in-flight connections or blocking query workers.
+  - Optional feature hot-reload (enabled by default).
+- **Dataset Ingestion Service Provider Interface (SPI)**:
+  - Added extensible DatasetIngestionAdapter trait and normalized intermediate structures IngestRecordV4 and IngestRecordV6.
+  - Added native CIDR parsing (rom_cidr) for custom threat intelligence feeds and non-IP2Location data providers.
+- **Automated Fuzzing & Corruption Resilience Suite**:
+  - Added differential noise and systematic byte-flip fuzz testing (	ests/test_fuzz_resilience.rs).
+  - Proves zero panics, bounds safety, and graceful error bubbling across arbitrary binary streams.
+
 ## [0.11.0] - 2026-10-06
 
 ### Added

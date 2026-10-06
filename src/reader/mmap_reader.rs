@@ -37,6 +37,15 @@ pub struct IpAtlasReader {
     isps: StringTableRef,
 }
 
+impl std::fmt::Debug for IpAtlasReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IpAtlasReader")
+            .field("header", &self.header)
+            .field("prof_count", &self.prof_count)
+            .finish_non_exhaustive()
+    }
+}
+
 impl IpAtlasReader {
     /// Opens and memory-maps an IPAtlas database from disk.
     /// If the database has `EMBEDDED_ZSTD` set in its header flags, its payload
