@@ -50,7 +50,7 @@ impl EytzingerSearch {
             #[cfg(target_arch = "x86_64")]
             unsafe {
                 core::arch::x86_64::_mm_prefetch(
-                    eytzinger.as_ptr().add(k * 16) as *const i8,
+                    eytzinger.as_ptr().wrapping_add(k * 16) as *const i8,
                     core::arch::x86_64::_MM_HINT_T0,
                 );
             }
@@ -93,7 +93,7 @@ impl EytzingerSearch {
             #[cfg(target_arch = "x86_64")]
             unsafe {
                 core::arch::x86_64::_mm_prefetch(
-                    eytzinger.as_ptr().add(k * 8) as *const i8,
+                    eytzinger.as_ptr().wrapping_add(k * 8) as *const i8,
                     core::arch::x86_64::_MM_HINT_T0,
                 );
             }

@@ -148,3 +148,70 @@ fn test_c_abi_negative_safety_and_null_defense() {
         unsafe { ipatlas_lookup_country_u32(ptr::null(), 0x01020304, ptr::null_mut()) };
     assert_eq!(res_null_buf, 0);
 }
+
+#[test]
+fn test_c_abi_non_utf8_path_defense() {
+    let bad_bytes: &[u8] = &[0xFF, 0xFE, 0xFD, 0x80, 0x00];
+    let handle = unsafe { ipatlas_open(bad_bytes.as_ptr() as *const std::ffi::c_char) };
+    assert!(handle.is_null(), "Non-UTF8 path must safely return NULL");
+
+    let handle_v = unsafe { ipatlas_open_verified(bad_bytes.as_ptr() as *const std::ffi::c_char) };
+    assert!(handle_v.is_null(), "Non-UTF8 path must safely return NULL");
+}
+
+#[test]
+fn test_c_abi_empty_string_path_defense() {
+    let empty_path = CString::new("").unwrap();
+    let handle = unsafe { ipatlas_open(empty_path.as_ptr()) };
+    assert!(handle.is_null(), "Empty string path must return NULL");
+
+    let handle_v = unsafe { ipatlas_open_verified(empty_path.as_ptr()) };
+    assert!(handle_v.is_null(), "Empty string path must return NULL");
+}
+
+#[test]
+fn test_c_abi_multithreaded_concurrent_lookup() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("geo_mt.csv");
+    let out_bin = dir.path().join("c_mt.bin");
+
+    let ip_u32 = 0x01020304u32;
+    std::fs::write(
+        &db_path,
+        format!("{ip_u32},{ip_u32},US,United States,CA,Los Angeles,34.05,-118.25\n"),
+    )
+    .unwrap();
+
+    let opts = CompilerOptions::new(&out_bin).geo(Some(&db_path));
+    compile(opts).unwrap();
+
+    let c_path = CString::new(out_bin.to_str().unwrap()).unwrap();
+    let handle = unsafe { ipatlas_open(c_path.as_ptr()) };
+    assert!(!handle.is_null());
+
+    let handle_raw = handle as usize;
+    let mut threads = Vec::new();
+
+    for _ in 0..8 {
+        let t = std::thread::spawn(move || {
+            let h = handle_raw as *const ipatlas_adapter_c::IpAtlasHandle;
+            for _ in 0..500 {
+                let mut flags = 0u32;
+                let found = unsafe { ipatlas_lookup_flags_u32(h, ip_u32, &mut flags) };
+                assert_eq!(found, 1);
+
+                let mut country_buf = [0i8; 4];
+                let res =
+                    unsafe { ipatlas_lookup_country_u32(h, ip_u32, country_buf.as_mut_ptr()) };
+                assert_eq!(res, 1);
+            }
+        });
+        threads.push(t);
+    }
+
+    for t in threads {
+        t.join().unwrap();
+    }
+
+    unsafe { ipatlas_close(handle) };
+}
