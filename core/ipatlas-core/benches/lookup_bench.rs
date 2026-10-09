@@ -130,15 +130,24 @@ fn bench_lookups(c: &mut Criterion) {
         });
     });
 
-    // 3b_batch. Batch lookup 64 IPs (Amortized throughput per IP)
+    // 3b_batch_ab: Batch lookup 64 IPs - Strict A/B Test (Without vs With Prefetch)
     let batch_ips: Vec<u32> = (0..64).map(|i| target_u32.wrapping_add(i * 256)).collect();
     let mut batch_flags = vec![None; 64];
-    group.bench_function("batch_64_flags_lookup_u32", |b| {
+
+    group.bench_function("ab_prefetch_off_batch_64", |b| {
+        b.iter(|| {
+            reader_compact.lookup_flags_batch_without_prefetch_u32(black_box(&batch_ips), black_box(&mut batch_flags));
+            black_box(&batch_flags[0]);
+        });
+    });
+
+    group.bench_function("ab_prefetch_on_batch_64", |b| {
         b.iter(|| {
             reader_compact.lookup_flags_batch_u32(black_box(&batch_ips), black_box(&mut batch_flags));
             black_box(&batch_flags[0]);
         });
     });
+
 
     // 3c. Profile-only fast path (Returns raw 20B ProfileGen4 without string resolution)
     group.bench_function("profile_only_lookup_u32", |b| {
