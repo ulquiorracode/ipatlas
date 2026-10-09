@@ -16,7 +16,7 @@ memmap2 = "0.9"
 zerocopy = { version = "0.8", features = ["derive"] }
 memchr = "2.7"
 thiserror = "2.0"
-stitch-rs = { git = "https://github.com/ulquiorracode/stitch-rs.git", rev = "30b0fe64a0eed2f41c668618b15586ed865433ac", default-features = false }
+stitch-rs = { git = "https://github.com/ulquiorracode/stitch-rs.git", tag = "v0.3.0", default-features = false }
 rayon = { version = "1.10", optional = true }
 anyhow = { version = "1.0", optional = true }
 zstd = { version = "0.14.0", optional = true }

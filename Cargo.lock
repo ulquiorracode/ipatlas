@@ -1790,9 +1790,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
+name = "stitch-core"
+version = "0.3.0"
+source = "git+https://github.com/ulquiorracode/stitch-rs.git?tag=v0.3.0#0086c990a9be218e2f03220f8c6a0653a76944da"
+
+[[package]]
 name = "stitch-rs"
-version = "0.1.0"
-source = "git+https://github.com/ulquiorracode/stitch-rs.git?rev=30b0fe64a0eed2f41c668618b15586ed865433ac#30b0fe64a0eed2f41c668618b15586ed865433ac"
+version = "0.3.0"
+source = "git+https://github.com/ulquiorracode/stitch-rs.git?tag=v0.3.0#0086c990a9be218e2f03220f8c6a0653a76944da"
+dependencies = [
+ "stitch-core",
+]
 
 [[package]]
 name = "strsim"

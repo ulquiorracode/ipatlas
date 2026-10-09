@@ -6,8 +6,9 @@
 use std::net::IpAddr;
 use std::time::Instant;
 
+use stitch_rs::blackboard::Blackboard;
 use stitch_rs::flow::FlowControl;
-use stitch_rs::middleware::{Middleware, TerminalHandler};
+use stitch_rs::middleware::{Layer, Terminal};
 use stitch_rs::pipeline::Pipeline;
 
 use crate::models::{GeoFlags, GeoRecord, GeoRecordRef};
@@ -15,6 +16,7 @@ use crate::reader::IpAtlasReader;
 
 /// Execution context tracking throughput, bogon short-circuits, and latency.
 #[derive(Debug, Default, Clone)]
+#[repr(C, align(64))]
 pub struct LookupContext {
     pub dispatches: u64,
     pub bogon_short_circuits: u64,
@@ -22,6 +24,8 @@ pub struct LookupContext {
     pub successful_lookups: u64,
     pub total_latency_nanos: u128,
 }
+
+impl Blackboard for LookupContext {}
 
 impl LookupContext {
     pub fn new() -> Self {
@@ -176,7 +180,7 @@ pub fn is_bogon_ip(ip: &IpAddr) -> bool {
 /// short-circuiting binary search completely and returning in ~1-2 ns.
 pub struct BogonFilterLayer;
 
-impl Middleware<LookupContext, LookupIntent, LookupOutcome, LookupError> for BogonFilterLayer {
+impl Layer<LookupContext, LookupIntent, LookupOutcome, LookupError> for BogonFilterLayer {
     fn on_enter(
         &self,
         ctx: &mut LookupContext,
@@ -198,7 +202,7 @@ impl Middleware<LookupContext, LookupIntent, LookupOutcome, LookupError> for Bog
 /// Enforces threat filtering policies on ascent after record is retrieved.
 pub struct ThreatPolicyLayer;
 
-impl Middleware<LookupContext, LookupIntent, LookupOutcome, LookupError> for ThreatPolicyLayer {
+impl Layer<LookupContext, LookupIntent, LookupOutcome, LookupError> for ThreatPolicyLayer {
     fn on_enter(
         &self,
         _ctx: &mut LookupContext,
@@ -244,7 +248,7 @@ impl Default for TelemetryLayer {
     }
 }
 
-impl Middleware<LookupContext, LookupIntent, LookupOutcome, LookupError> for TelemetryLayer {
+impl Layer<LookupContext, LookupIntent, LookupOutcome, LookupError> for TelemetryLayer {
     fn on_enter(
         &self,
         ctx: &mut LookupContext,
@@ -280,9 +284,7 @@ impl<'a> IpAtlasTerminal<'a> {
     }
 }
 
-impl<'a> TerminalHandler<LookupContext, LookupIntent, LookupOutcome, LookupError>
-    for IpAtlasTerminal<'a>
-{
+impl<'a> Terminal<LookupContext, LookupIntent, LookupOutcome, LookupError> for IpAtlasTerminal<'a> {
     fn execute(
         &mut self,
         _ctx: &mut LookupContext,
@@ -343,8 +345,8 @@ pub trait IpAtlasPipelineExt {
 impl IpAtlasPipelineExt for IpAtlasReader {
     fn standard_pipeline<'a>(&'a self) -> StandardLookupPipeline<'a> {
         Pipeline::on_terminal(IpAtlasTerminal::new(self))
-            .use_middleware(BogonFilterLayer)
-            .use_middleware(TelemetryLayer::new())
+            .wrap(BogonFilterLayer)
+            .wrap(TelemetryLayer::new())
     }
 
     fn query_pipeline(
