@@ -1260,6 +1260,57 @@ impl IpAtlasReader {
         self.lookup_flags(ip).is_some_and(|f| f.is_proxy())
     }
 
+    /// High-throughput batch lookup for IPv4 flags writing directly into pre-allocated destination slice.
+    ///
+    /// Guarantees strictly zero allocations (`0 bytes heap`). Employs SIMD-friendly loop structure.
+    #[inline]
+    pub fn lookup_flags_batch_u32(&self, ips: &[u32], results: &mut [Option<GeoFlags>]) {
+        assert_eq!(
+            ips.len(),
+            results.len(),
+            "Input IP slice and output results slice must have identical lengths"
+        );
+
+        let arch = pulp::Arch::new();
+        arch.dispatch(|| {
+            let chunks = ips.chunks_exact(8);
+            let rem_ips = chunks.remainder();
+            let mut out_idx = 0;
+
+            for chunk in chunks {
+                for &ip in chunk {
+                    results[out_idx] = self.lookup_flags_u32(ip);
+                    out_idx += 1;
+                }
+            }
+
+            for &ip in rem_ips {
+                results[out_idx] = self.lookup_flags_u32(ip);
+                out_idx += 1;
+            }
+        });
+    }
+
+    /// High-throughput batch lookup for IPv4 records writing directly into pre-allocated destination slice.
+    ///
+    /// Guarantees strictly zero allocations (`0 bytes heap`).
+    #[inline]
+    pub fn lookup_batch_u32<'a>(
+        &'a self,
+        ips: &[u32],
+        results: &mut [Option<GeoRecordRef<'a>>],
+    ) {
+        assert_eq!(
+            ips.len(),
+            results.len(),
+            "Input IP slice and output results slice must have identical lengths"
+        );
+
+        for (idx, &ip) in ips.iter().enumerate() {
+            results[idx] = self.lookup_u32(ip);
+        }
+    }
+
     /// Fast-path boolean predicate: returns true if the IPv4 belongs to a datacenter / cloud provider.
     #[inline(always)]
     pub fn is_datacenter_u32(&self, ip: u32) -> bool {
