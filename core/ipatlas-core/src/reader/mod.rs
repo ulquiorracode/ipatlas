@@ -12,4 +12,3 @@ pub use error::ReaderError;
 pub use hot_reload::HotReloadDatabase;
 pub use mmap_reader::{HeaderVariant, IpAtlasReader};
 pub use prefetch::prefetch_read_l1;
-

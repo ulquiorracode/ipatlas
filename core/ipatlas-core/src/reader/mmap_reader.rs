@@ -1332,15 +1332,10 @@ impl IpAtlasReader {
     }
 
     /// High-throughput batch lookup for IPv4 records writing directly into pre-allocated destination slice.
-
     ///
     /// Guarantees strictly zero allocations (`0 bytes heap`).
     #[inline]
-    pub fn lookup_batch_u32<'a>(
-        &'a self,
-        ips: &[u32],
-        results: &mut [Option<GeoRecordRef<'a>>],
-    ) {
+    pub fn lookup_batch_u32<'a>(&'a self, ips: &[u32], results: &mut [Option<GeoRecordRef<'a>>]) {
         assert_eq!(
             ips.len(),
             results.len(),
@@ -1355,7 +1350,6 @@ impl IpAtlasReader {
             results[idx] = self.lookup_u32(ip);
         }
     }
-
 
     /// Fast-path boolean predicate: returns true if the IPv4 belongs to a datacenter / cloud provider.
     #[inline(always)]

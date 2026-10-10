@@ -136,18 +136,21 @@ fn bench_lookups(c: &mut Criterion) {
 
     group.bench_function("ab_prefetch_off_batch_64", |b| {
         b.iter(|| {
-            reader_compact.lookup_flags_batch_without_prefetch_u32(black_box(&batch_ips), black_box(&mut batch_flags));
+            reader_compact.lookup_flags_batch_without_prefetch_u32(
+                black_box(&batch_ips),
+                black_box(&mut batch_flags),
+            );
             black_box(&batch_flags[0]);
         });
     });
 
     group.bench_function("ab_prefetch_on_batch_64", |b| {
         b.iter(|| {
-            reader_compact.lookup_flags_batch_u32(black_box(&batch_ips), black_box(&mut batch_flags));
+            reader_compact
+                .lookup_flags_batch_u32(black_box(&batch_ips), black_box(&mut batch_flags));
             black_box(&batch_flags[0]);
         });
     });
-
 
     // 3c. Profile-only fast path (Returns raw 20B ProfileGen4 without string resolution)
     group.bench_function("profile_only_lookup_u32", |b| {
