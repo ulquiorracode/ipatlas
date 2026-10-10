@@ -35,6 +35,7 @@ pub struct IpAtlasReader {
     cities: StringTableRef,
     regions: StringTableRef,
     isps: StringTableRef,
+    guide_v4: crate::reader::guide::GuideTableV4,
 }
 
 impl std::fmt::Debug for IpAtlasReader {
@@ -370,6 +371,50 @@ impl IpAtlasReader {
             }
         };
 
+        let guide_v4 = match &dispatch {
+            TableDispatch::V4StandardSoa {
+                ip_from_off, count, ..
+            }
+            | TableDispatch::V5StandardSoa {
+                ip_from_off, count, ..
+            }
+            | TableDispatch::V4CompactSoa {
+                ip_from_off, count, ..
+            }
+            | TableDispatch::V5CompactSoa {
+                ip_from_off, count, ..
+            } => {
+                let ip_froms: &[u32] = unsafe {
+                    std::slice::from_raw_parts(
+                        storage.as_ptr().add(*ip_from_off) as *const u32,
+                        *count,
+                    )
+                };
+                crate::reader::guide::GuideTableV4::from_soa_ip_froms(ip_froms)
+            }
+            TableDispatch::V4CompactAos { offset, count }
+            | TableDispatch::V5CompactAos { offset, count } => {
+                let ranges: &[Ipv4RangeCompact] = unsafe {
+                    std::slice::from_raw_parts(
+                        storage.as_ptr().add(*offset) as *const Ipv4RangeCompact,
+                        *count,
+                    )
+                };
+                crate::reader::guide::GuideTableV4::from_ranges_compact(ranges)
+            }
+            TableDispatch::V4StandardAos { offset, count }
+            | TableDispatch::V5StandardAos { offset, count } => {
+                let ranges: &[Ipv4Range] = unsafe {
+                    std::slice::from_raw_parts(
+                        storage.as_ptr().add(*offset) as *const Ipv4Range,
+                        *count,
+                    )
+                };
+                crate::reader::guide::GuideTableV4::from_ranges_standard(ranges)
+            }
+            TableDispatch::Empty => crate::reader::guide::GuideTableV4::new(),
+        };
+
         let reader = Self {
             mmap: storage,
             header,
@@ -380,6 +425,7 @@ impl IpAtlasReader {
             cities,
             regions,
             isps,
+            guide_v4,
         };
 
         #[cfg(unix)]
@@ -818,6 +864,15 @@ impl IpAtlasReader {
                 prof_off,
                 count,
             } => {
+                if count == 0 {
+                    return None;
+                }
+                // Stage 1: Guide Table bounds narrowing
+                let (start, end) = self.guide_v4.guide_bounds(ip, count);
+                if start >= end {
+                    return None;
+                }
+
                 // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
                 let ip_froms: &[u32] = unsafe {
                     std::slice::from_raw_parts(
@@ -825,11 +880,10 @@ impl IpAtlasReader {
                         count,
                     )
                 };
-                let idx = match ip_froms.binary_search(&ip) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
+                let slice = &ip_froms[start..end];
+                let local_idx = crate::reader::branchless::branchless_search_u32(slice, ip)?;
+                let idx = start + local_idx;
+
                 let ip_from = ip_froms[idx];
                 let tos: &[u32] = unsafe {
                     std::slice::from_raw_parts(
@@ -861,6 +915,14 @@ impl IpAtlasReader {
                 prof_off,
                 count,
             } => {
+                if count == 0 {
+                    return None;
+                }
+                let (start, end) = self.guide_v4.guide_bounds(ip, count);
+                if start >= end {
+                    return None;
+                }
+
                 // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
                 let ip_froms: &[u32] = unsafe {
                     std::slice::from_raw_parts(
@@ -868,11 +930,10 @@ impl IpAtlasReader {
                         count,
                     )
                 };
-                let idx = match ip_froms.binary_search(&ip) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
+                let slice = &ip_froms[start..end];
+                let local_idx = crate::reader::branchless::branchless_search_u32(slice, ip)?;
+                let idx = start + local_idx;
+
                 let ip_from = ip_froms[idx];
                 let counts: &[u16] = unsafe {
                     std::slice::from_raw_parts(
@@ -895,6 +956,14 @@ impl IpAtlasReader {
             }
             TableDispatch::V4CompactAos { offset, count }
             | TableDispatch::V5CompactAos { offset, count } => {
+                if count == 0 {
+                    return None;
+                }
+                let (start, end) = self.guide_v4.guide_bounds(ip, count);
+                if start >= end {
+                    return None;
+                }
+
                 // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
                 let ranges: &[Ipv4RangeCompact] = unsafe {
                     std::slice::from_raw_parts(
@@ -902,11 +971,13 @@ impl IpAtlasReader {
                         count,
                     )
                 };
-                let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
+                let slice = &ranges[start..end];
+                let local_idx =
+                    crate::reader::branchless::branchless_search_by_key_u32(slice, ip, |r| {
+                        r.ip_from
+                    })?;
+                let idx = start + local_idx;
+
                 let range = ranges.get(idx)?;
                 if !range.contains(ip) {
                     return None;
@@ -915,6 +986,14 @@ impl IpAtlasReader {
             }
             TableDispatch::V4StandardAos { offset, count }
             | TableDispatch::V5StandardAos { offset, count } => {
+                if count == 0 {
+                    return None;
+                }
+                let (start, end) = self.guide_v4.guide_bounds(ip, count);
+                if start >= end {
+                    return None;
+                }
+
                 // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
                 let ranges: &[Ipv4Range] = unsafe {
                     std::slice::from_raw_parts(
@@ -922,11 +1001,13 @@ impl IpAtlasReader {
                         count,
                     )
                 };
-                let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
+                let slice = &ranges[start..end];
+                let local_idx =
+                    crate::reader::branchless::branchless_search_by_key_u32(slice, ip, |r| {
+                        r.ip_from
+                    })?;
+                let idx = start + local_idx;
+
                 let range = ranges.get(idx)?;
                 if !range.contains(ip) {
                     return None;
@@ -993,11 +1074,10 @@ impl IpAtlasReader {
                     )
                 };
                 let ip_hi = (ip >> 64) as u64;
-                let idx = match ranges.binary_search_by_key(&ip_hi, |r| r.ip_from_hi) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
+                let idx =
+                    crate::reader::branchless::branchless_search_by_key_u64(ranges, ip_hi, |r| {
+                        r.ip_from_hi
+                    })?;
                 let range = ranges.get(idx)?;
                 if !range.contains_hi(ip_hi) {
                     return None;
@@ -1014,11 +1094,10 @@ impl IpAtlasReader {
                         count,
                     )
                 };
-                let idx = match ranges.binary_search_by_key(&ip, |r| r.ip_from()) {
-                    Ok(i) => i,
-                    Err(0) => return None,
-                    Err(i) => i - 1,
-                };
+                let idx =
+                    crate::reader::branchless::branchless_search_by_key_u128(ranges, ip, |r| {
+                        r.ip_from()
+                    })?;
                 let range = ranges.get(idx)?;
                 if !range.contains(ip) {
                     return None;
