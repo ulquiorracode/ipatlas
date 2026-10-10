@@ -21,11 +21,12 @@ pub fn prefetch_read_l1<T>(ptr: *const T) {
 
     #[cfg(target_arch = "aarch64")]
     unsafe {
-        #[cfg(target_arch = "aarch64")]
-        core::arch::aarch64::__prefetch(
-            ptr as *const u8,
-            core::arch::aarch64::_PREFETCH_READ,
-            core::arch::aarch64::_PREFETCH_LOCALITY3,
+        // prfm pldl1keep, [ptr]
+        // Hardware prefetch for read into L1 cache, retaining in cache.
+        core::arch::asm!(
+            "prfm pldl1keep, [{0}]",
+            in(reg) ptr,
+            options(nostack, preserves_flags, readonly),
         );
     }
 
