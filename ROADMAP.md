@@ -152,9 +152,9 @@
 ---
 
 ## v0.12.0 — Honest Production-Ready & Ecosystem Integrations [Completed]
- 
+
 **Goal:** Deliver an honest single-node production-ready library and CLI with zero silent failures on corrupted data, thread-safe hot reload, SPI ingestion, and clear boundaries between production search and experimental benchmarks.
- 
+
 - [x] **Strict Corruption vs NotFound Propagation**:
   - Differentiate genuine interval misses (`Ok(None)`) from internal database corruption or tampered metadata (`Err(ReaderError::Corrupted)`).
   - Strict `try_lookup_*` family of methods preventing edge firewalls from silently approving malicious traffic when database sectors are corrupted.
@@ -174,6 +174,7 @@
 ### Non-Goals for v0.12.0
 
 To maintain absolute architectural honesty and avoid speculative complexity:
+
 - **Eytzinger Search in Production Runtime**: Retained purely as Criterion benchmark prototype; flat binary search remains on-disk format.
 - **SIMD /16-LUT**: Not implemented; DRAM bus latency dominates 5.3M record lookup.
 - **NUMA-Aware Sharding**: Single-node memory-mapped read-only concurrency via OS page cache is sufficient.
@@ -201,7 +202,9 @@ To maintain absolute architectural honesty and avoid speculative complexity:
   - `ipatlas-cli compile --maxmind-blocks ... --maxmind-locations ...`: 1-command migration from GeoLite2 City CSV.
 
 ### Non-Goals for Ecosystem Expansion
+
 To prevent maintenance sprawl while maintaining the "Single Source of Truth" rule:
+
 - **Node.js / napi-rs Native Addon**: Out of scope; Node.js applications integrate via the ultra-compact Kubernetes HTTP sidecar (`ipatlas serve`) or standard FFI (`ffi-napi`).
 - **Envoy WASM Filter**: Out of scope; Envoy external authorization (`ext_authz`) to the local sidecar provides sub-millisecond evaluation with zero WASM toolchain overhead.
 - **Dynamic Language Custom Parsers**: Zero custom database parsing outside Rust core; all language bindings MUST remain thin wrappers around `ipatlas_adapter_c`.
@@ -231,6 +234,26 @@ To prevent maintenance sprawl while maintaining the "Single Source of Truth" rul
   - `ipatlas update --feed <url> --target <path> --verify-crc`: Downloads and verifies fresh feeds in the background.
 - [ ] **Sidecar Atomic Auto-Reload (`ipatlas serve --auto-reload`)**:
   - Integrates `HotReloadDatabase` with `notify` file-watchers to atomically swap in-memory mmap containers on Kubernetes ConfigMap changes without dropping active HTTP connections.
+
+---
+
+## v0.16.0 — Ahead-of-Time Distribution Metadata & 2-Stage Range Lookup [Planned (No Deadline)]
+
+**Goal:** Leverage ahead-of-time database compilation to analyze dataset key distribution and inject ultra-compact metadata headers/footers for sub-20ns 2-stage branchless range lookups without runtime divisions.
+
+- [ ] **Compiler-Side Distribution Analysis & Sparse Bookmarks**:
+  - Offline dataset profiling calculating monotonic IP prefix density and CDF (Cumulative Distribution Function).
+  - Generation of lightweight quantile bookmarks (e.g. 64–128 interval chunk anchors) delta-compressed via bit-packed Elias-Fano representation (<2 KB footprint per 1M records).
+  - Run-Length Encoded (RLE) presence bitset for Bogon and unallocated IP subnets, enabling $O(1)$ instant negative cache short-circuiting (zero DRAM memory touches on Bogon misses).
+- [ ] **Scrooge 2-Stage Range Lookup Engine**:
+  - Replace speculative interpolation search with deterministic 2-stage hierarchy:
+    1. **Stage 1 (L1/L2 Cache Guide-Search)**: $O(1)$ direct index or compact delta-encoded bookmark lookup to isolate a narrow slice ($\le 64$ records).
+    2. **Stage 2 (Local Flat Search)**: Branchless `cmov` / vector-assisted binary search over contiguous cache-aligned interval slices.
+  - Complete elimination of costly 64-bit integer divisions (`div`/`idiv`, saving 35–45 CPU cycles per step).
+  - Deterministic <20 ns query latency on realistic non-uniform IP distributions.
+- [ ] **Empirical Benchmark & Validation Stand**:
+  - Comparative Criterion latency benchmarks: Uniform vs Skewed (BGP-like) distributions.
+  - Verified cache-miss profiles using Linux `perf` (`L1-dcache-load-misses`, `LLC-load-misses`, `branch-misses`).
 
 ---
 
