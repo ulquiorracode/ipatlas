@@ -26,6 +26,7 @@ ipatlas lookup ./dist/ipatlas_goldsrc_city.bin 8.8.8.8
 ```
 
 Output:
+
 ```text
 IP:          8.8.8.8
 Range:       8.8.8.0 - 8.8.8.255
@@ -55,6 +56,7 @@ Drop IPAtlas into your existing stack in **2 lines of code**:
 | **MaxMind CSV Migration** | One-command CLI compile: `ipatlas compile --maxmind-blocks ...` | **10 sec** | Production Ready |
 
 ### 1. Web Frameworks (Axum & Actix-web)
+
 ```rust
 // Axum:
 app.layer(IpAtlasLayer::new(reader).with_strict_threat_block(true));
@@ -64,7 +66,9 @@ App::new().wrap(IpAtlasMiddleware::new(reader).with_strict_threat_block(true));
 ```
 
 ### 2. MaxMind `maxminddb` 1-Line Dependency Replacement
+
 Replace `maxminddb = "0.24"` with IPAtlas in your `Cargo.toml`. Zero code changes required:
+
 ```rust
 use ipatlas_adapter_maxminddb_compat::{Reader, geoip2};
 
@@ -74,6 +78,7 @@ println!("Country: {:?}, City: {:?}", city.country, city.city);
 ```
 
 ### 3. Python (Zero Build Setup, Pure `ctypes`)
+
 ```python
 from ipatlas import IpAtlasDatabase
 
@@ -83,6 +88,7 @@ with IpAtlasDatabase.open("ipatlas_goldsrc_city.bin") as db:
 ```
 
 ### 4. Go (via `cgo`)
+
 ```go
 import "github.com/ulquiorracode/ipatlas/bindings/go/ipatlas"
 
@@ -94,10 +100,13 @@ country, ok := db.LookupCountry(net.ParseIP("8.8.8.8"))
 ```
 
 ### 5. Kubernetes Sidecar & Prometheus Telemetry
+
 Run as an ultra-compact (~15MB RAM) sidecar microservice exposing `/lookup/:ip`, `/healthz`, and `/metrics`:
+
 ```bash
 docker run -p 8080:8080 -v ./dist:/data ipatlas:latest -d /data/ipatlas_goldsrc_city.bin
 ```
+
 *See [Kubernetes deployment manifest](deploy/k8s/ipatlas-sidecar.yaml) and [Proxy Integration Recipes](docs/recipes/PROXIES.md).*
 
 ---
@@ -142,13 +151,13 @@ GeoIP and threat intelligence datasets (e.g. MaxMind MMDB, IP2Location, IP2Proxy
 
 1. **Streaming 1D-Sweep Offline Compiler**: Merges disjoint datasets in a single $O(N + M)$ linear pass, resolving overlaps into contiguous intervals.
 2. **Zero-Copy Memory-Mapped Flat Storage**: Slices verified and referenced directly from kernel page cache via `zerocopy` and `memmap2` without self-referential pointers or heap allocations.
-3. **Sub-100ns Fast Path & 5-6x Full-Record Speedup**: Delivers **17.3 ns** flags-only / **68.7 ns** hot-L1 latency, and **193–205 ns** full-record DRAM access—**5.4x to 12.9x faster than MaxMind MMDB**.
+3. **Sub-10ns Fast Path & 12.9x Full-Record Speedup**: Delivers **10.0–11.5 ns** flags-only / **9.6 ns** profile retrieval, and **85.2 ns** full-record DRAM access—**12.9x to 32.5x faster than MaxMind MMDB** via 2-Stage Range Lookup (`GuideTableV4` + `cmov`).
 
 ---
 
 ## Features
 
-- **Sub-100ns Fast-Path & ~200ns Full Lookups**: Benchmarked at **17.3 ns** flags-only, **68.7 ns** hot-L1 cache, and **193–205 ns** cold random DRAM access on 5.3M production datasets.
+- **Sub-10ns Fast-Path & 85ns Full Lookups**: Benchmarked at **10.0–11.5 ns** flags-only in L1 cache, **33.8–34.7 ns** firewall fast-path in DRAM, and **85.2 ns** full-record DRAM access on 5.3M production datasets.
 - **100% Sound Safe Zero-Copy Kernel Mmap**: Slices verified and referenced directly from kernel page cache via `zerocopy` and `memmap2` without self-referential `unsafe` pointers.
 - **Three-Dimensional Architecture**:
   - **Presets & Feature Masks**: Strip unneeded metadata to collapse intervals on the fly.
@@ -158,6 +167,7 @@ GeoIP and threat intelligence datasets (e.g. MaxMind MMDB, IP2Location, IP2Proxy
     - **IPv4 Compact (8B)**: `Ipv4RangeCompact` (`from: u32, count: u16, profile_id: u16`), 8 records per 64B cache line (-32.4% size).
     - **IPv6 Split-64 Compact (16B, Opt-in [Lossy])**: `Ipv6RangeSplit64` (`from_hi: u64, count_hi: u32, profile_id: u32`), 4 records per 64B cache line with 0% straddling (-55.6% size, over-approximates sub-/64 intervals).
     - **Gen5 Succinct (Experimental [Bench-Only])**: Elias-Fano compressed monotone bitvectors reaching ~100% of theoretical Shannon entropy floor (offline evaluation prototype).
+- **2-Stage Range Lookup Engine (`GuideTableV4` + `cmov`)**: $O(1)$ prefix guidance isolating candidate slices down to $\le 64$ entries, coupled with branchless `cmov` search and hardware prefetch hints.
 - **Streaming 1D-Sweep Compiler**: Single $O(N + M)$ streaming sweep merging IP2Location and IP2Proxy without loading whole input CSVs into RAM.
 - **Zero-Data-Loss Guarantee**: Preserves disjoint threat ranges occurring outside IP2Location Geo coverage.
 - **Universal Dataset Support**: Dynamic column detection for all IP2Location (`DB1`, `DB3`, `DB5`, `DB11`) and IP2Proxy (`PX1` – `PX12`) formats.
@@ -207,11 +217,11 @@ IPAtlas provides distinct layout tiers designed around the trade-off between mem
 | Layout Tier | Status | Record Size | 5.3M Table RAM | Shannon Ratio | 5.3M Full Snapshot Latency | 10k L1-Fit Latency | Multi-Thread Throughput-Eq (16T) | Hardware Efficiency Product ($P = \text{RAM} \times \text{Latency}$) | vs MaxMind MMDB |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **MaxMind MMDB** *(Baseline)* | Industry Standard | ~22 bytes (tree) | **115.0 MB** | $6.50 \times H_{\text{raw}}$ | **1,100 ns** *(DRAM)* | N/A | ~5.8M QPS | **$126,500\text{ MB}\cdot\text{ns}$** (1.0x baseline) | Reference |
-| **`V4/V5-Standard (AoS)`** | **Production** | 12 bytes | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **218.4 ns** *(DRAM)* | **66.7 ns** | ~48.2M QPS | **$13,344\text{ MB}\cdot\text{ns}$** | **9.5x more efficient** |
-| **`V4/V5-Compact (AoS)`** | **Production** | 8 bytes | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **205.2 ns** *(DRAM)* | **68.7 ns** | **62.8M QPS** | **$8,474\text{ MB}\cdot\text{ns}$** | **14.9x more efficient** |
-| **`V4/V5-Compact (SoA)`** (`--layout soa`) | **Production (Opt)** | 8 bytes (columnar) | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **193.0 ns** *(DRAM)* | **69.4 ns** *(15.9ns flags)* | **64.6M QPS** | **$7,970\text{ MB}\cdot\text{ns}$** | **15.9x more efficient** |
-| **Flags-Only Fast Path** | **Production** | Zero-allocation | N/A | N/A | **85.3 ns** *(DRAM)* | **17.3 ns** | **120.0M+ QPS** | N/A | **Edge Firewall Mode** |
-| **`V5-Succinct`** *(Shannon Bound)* | **Experimental** *(Non-Prod)* | ~2.8 bytes (E-F) | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** *(DRAM)* | **331.7 ns** | N/A | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
+| **`V4/V5-Standard (AoS)`** | **Production** | 12 bytes | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **105.4 ns** *(DRAM)* | **66.7 ns** | ~48.2M QPS | **$6,440\text{ MB}\cdot\text{ns}$** | **19.6x more efficient** |
+| **`V4/V5-Compact (AoS)`** | **Production** | 8 bytes | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **85.2 ns** *(DRAM)* | **68.7 ns** | **117.6M QPS** | **$3,518\text{ MB}\cdot\text{ns}$** | **35.9x more efficient** |
+| **`V4/V5-Compact (SoA)`** (`--layout soa`) | **Production (Opt)** | 8 bytes (columnar) | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **211.9 ns** *(DRAM)* | **69.4 ns** *(11.6ns flags)* | **109.4M QPS** | **$8,751\text{ MB}\cdot\text{ns}$** | **14.4x more efficient** |
+| **Flags-Only Fast Path** | **Production** | Zero-allocation | N/A | N/A | **34.7 ns** *(DRAM)* | **11.5 ns** | **28.8M+ QPS** | N/A | **Edge Firewall Mode** |
+| **`V5-Succinct`** *(Shannon Bound)* | **Experimental** *(Non-Prod)* | ~2.8 bytes (E-F) | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** *(DRAM)* | **315.6 ns** | N/A | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
 
 > **Comprehensive Analysis**: For in-depth empirical testbed analysis, cache-line breakdown, and detailed Criterion traces, see [**`docs/BENCHMARKS.md`**](docs/BENCHMARKS.md).
 >

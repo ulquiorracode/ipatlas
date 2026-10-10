@@ -51,14 +51,14 @@ cargo run --release -- bench dist/ipatlas_goldsrc_firewall_soa.bin -n 1000000
 | Engine & Layout | Target Record / Query Type | Single-Thread QPS | Avg Latency / Throughput-Equivalent | Speedup vs MMDB | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **MaxMind MMDB** | Full Geo Record (Tree Traversal) | ~909,000 QPS | **1,100.0 ns** (Latency) | 1.0x (Baseline) | Standard `maxminddb` reader, pointer-chasing tree |
-| **IPAtlas Compact AoS** | Full Geo Record (`lookup_u32`) | **4,873,652 QPS** | **205.2 ns** (Latency) | **5.36x** | `Ipv4RangeCompact` (8B contiguous: `from: u32, count: u16, prof: u16`) |
-| **IPAtlas Compact SoA** | Full Geo Record (`lookup_u32`) | **5,181,607 QPS** | **193.0 ns** (Latency) | **5.70x** | Columnar (`ip_from` array + stride `count`/`prof_id`) |
-| **IPAtlas Compact AoS** | Country Code Fast Path (`country_code`) | **9,094,919 QPS** | **110.0 ns** (Latency) | **10.0x** | Zero heap allocation, 2-byte ISO code read |
-| **IPAtlas Compact SoA** | Country Code Fast Path (`country_code`) | **7,635,079 QPS** | **131.0 ns** (Latency) | **8.40x** | Indirect profile lookup |
-| **IPAtlas Compact AoS** | **Flags-Only Fast Path** (`lookup_flags_u32`) | **11,725,886 QPS** | **85.3 ns** (Latency) | **12.9x** | Zero heap allocation, firewall mode (`GeoFlags`) |
-| **IPAtlas Compact SoA** | **Flags-Only Fast Path** (`lookup_flags_u32`) | **11,399,752 QPS** | **87.7 ns** (Latency) | **12.5x** | Firewall threat bitmask direct extraction |
-| **IPAtlas Parallel Rayon** | Compact SoA (16 hardware threads) | **64,563,614 QPS** | **15.5 ns** (Throughput-Eq) | **71.0x** | 16-thread aggregate batch processing ($1 / \text{QPS}$) |
-| **stitch-rs Pipeline** | Full Monomorphic U-Cycle Pipeline | **3,111,527 QPS** | **321.4 ns** (Latency) | **3.42x** | Bogon L1 filter + context + threat policy + telemetry |
+| **IPAtlas Compact AoS (v0.16.0)** | Full Geo Record (`lookup_u32`) | **11,742,753 QPS** | **85.2 ns** (Latency) | **12.9x** | 2-Stage Range Lookup (`GuideTableV4` + `cmov`), `Ipv4RangeCompact` |
+| **IPAtlas Compact SoA (v0.16.0)** | Full Geo Record (`lookup_u32`) | **4,719,414 QPS** | **211.9 ns** (Latency) | **5.19x** | Columnar (`ip_from` array + stride `count`/`prof_id`) |
+| **IPAtlas Compact AoS (v0.16.0)** | Country Code Fast Path (`country_code`) | **23,867,259 QPS** | **41.9 ns** (Latency) | **26.2x** | Zero heap allocation, 2-byte ISO code read |
+| **IPAtlas Compact SoA (v0.16.0)** | Country Code Fast Path (`country_code`) | **23,006,276 QPS** | **43.5 ns** (Latency) | **25.3x** | Indirect profile lookup |
+| **IPAtlas Compact AoS (v0.16.0)** | **Flags-Only Fast Path** (`lookup_flags_u32`) | **28,838,306 QPS** | **34.7 ns** (Latency) | **31.7x** | Zero heap allocation, firewall mode (`GeoFlags`) |
+| **IPAtlas Compact SoA (v0.16.0)** | **Flags-Only Fast Path** (`lookup_flags_u32`) | **29,612,958 QPS** | **33.8 ns** (Latency) | **32.5x** | Firewall threat bitmask direct extraction |
+| **IPAtlas Parallel Rayon** | Compact AoS (16 hardware threads) | **117,594,487 QPS** | **8.5 ns** (Throughput-Eq) | **129.3x** | 16-thread aggregate batch processing ($1 / \text{QPS}$) |
+| **stitch-rs Pipeline** | Full Monomorphic U-Cycle Pipeline | **4,159,759 QPS** | **240.4 ns** (Latency) | **4.57x** | Bogon L1 filter + context + threat policy + telemetry |
 
 ---
 
@@ -73,12 +73,12 @@ Measured with Criterion.rs (10,000 intervals, hot-cache evaluation):
 | lookup/random_cache_miss_lookup_u32 | 100 samples | **23.41 ns** | Pure key probe miss path (returns None immediately) |
 | lookup/compact_v4_1_lookup_u32 | 100 samples | **68.73 ns** | AoS binary search over 10k compact records |
 | lookup/soa_compact_lookup_u32 | 100 samples | **69.43 ns** | SoA columnar binary search over 10k compact records |
-| lookup/flags_only_lookup_u32 | 100 samples | **17.30 ns** | Pure firewall bitmask lookup (AoS) |
-| lookup/soa_compact_flags_u32 | 100 samples | **15.95 ns** | Pure firewall bitmask lookup (SoA) |
-| lookup/profile_only_lookup_u32 | 100 samples | **13.19 ns** | Fast-path zero-alloc raw 20B ProfileGen4 retrieval |
-| lookup/is_threat_predicate_u32 | 100 samples | **15.88 ns** | Single-cycle predicate boolean check |
-| lookup/owned_strings_lookup | 100 samples | **214.53 ns** | Legacy owned String allocation path |
-| lookup/succinct_elias_fano_lookup | 100 samples | **331.66 ns** | Bitvector select/rank binary search |
+| lookup/flags_only_lookup_u32 | 100 samples | **11.48 ns** | 2-Stage branchless firewall bitmask lookup (AoS, -34% latency) |
+| lookup/soa_compact_flags_u32 | 100 samples | **11.61 ns** | 2-Stage branchless firewall bitmask lookup (SoA, -27% latency) |
+| lookup/profile_only_lookup_u32 | 100 samples | **9.61 ns** | 2-Stage zero-alloc raw 20B ProfileGen4 retrieval (sub-10ns barrier) |
+| lookup/is_threat_predicate_u32 | 100 samples | **10.04 ns** | 2-Stage branchless single-cycle threat predicate (-37% latency) |
+| lookup/owned_strings_lookup | 100 samples | **188.26 ns** | Owned String allocation path |
+| lookup/succinct_elias_fano_lookup | 100 samples | **315.55 ns** | Bitvector select/rank binary search |
 | lookup/ipv6_standard_lookup_u128 | 100 samples | **71.10 ns** | 128-bit IPv6 full record lookup (Ipv6Range 36B) |
 | lookup/ipv6_flags_lookup_u128 | 100 samples | **13.51 ns** | 128-bit IPv6 flags-only fast path |
 | lookup/ipv6_profile_lookup_u128 | 100 samples | **13.33 ns** | 128-bit IPv6 raw ProfileGen4 metadata profile |
