@@ -6,6 +6,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-10-11
+
+### Refactored
+
+- **Core Modular Decomposition (`ipatlas-core`)**:
+  - Decomposed bloated monolithic `mmap_reader.rs` (>1500 LOC) into focused, single-responsibility submodules:
+    - `reader/open.rs` (`ReaderInitializer`): Encapsulates initialization, file validation, V4/V5 header parsing, AOT distribution footer (`ATFT`) zero-copy extraction, and legacy fallback `GuideTableV4` construction.
+    - `reader/dispatch.rs` (`TableDispatch` / `TableDispatchV6`): Encapsulates all 8 raw binary search lookup algorithms (`lookup_raw_v4`, `lookup_raw_v6`) across AoS/SoA Standard and Compact formats.
+    - `reader/mmap_reader.rs`: Retained as clean public facade exposing safe zero-allocation APIs (`lookup_u32`, `lookup_flags_u32`, `lookup_addr`, `is_datacenter`, batch queries).
+  - Decomposed `compiler/writer.rs`:
+    - `compiler/string_pool.rs`: Isolated `StringPool` with 1-element Last-Value Cache (LVC) into dedicated module.
+  - Preserved 100% backward compatibility across Rust public API and C-ABI with zero heap allocations on hot paths.
+
 ## [0.14.0] - 2026-10-11
 
 ### Added

@@ -6,6 +6,7 @@ pub mod guide;
 #[cfg(feature = "hot-reload")]
 pub mod hot_reload;
 pub mod mmap_reader;
+pub(crate) mod open;
 pub mod prefetch;
 pub(crate) mod strings;
 
