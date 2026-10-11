@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.16.0] - 2026-10-11
+## [0.14.0] - 2026-10-11
 
 ### Added
 
@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **2-Stage Range Lookup Engine (`GuideTableV4` + `cmov`)**:
   - Direct $O(1)$ prefix partitioning narrowing 5.3M intervals down to $\le 64$ candidates.
   - Branchless `cmov` search coupled with cache-friendly contiguous slicing, achieving **85.2 ns** full-record lookup and **34.7 ns** flags-only edge firewall throughput (~28.8M QPS).
+
+## [0.13.1] - 2026-10-10
+
+### Added
+
+- **Portable Hardware Prefetch Hints**:
+  - Added portable L1 cache prefetch abstraction (`prefetch_read_l1`) supporting x86_64 (`_mm_prefetch`), AArch64 (`prfm pldl1keep`), and software no-op fallback.
+  - Integrated prefetch hints into high-throughput batch query methods (`lookup_batch_u32`, `lookup_flags_batch_u32`).
+- **SIMD Batch Query Acceleration**:
+  - Added vector-assisted batch resolution using `pulp` architecture dispatch.
+- **Upgraded `stitch-rs` Monomorphic Pipeline**:
+  - Updated `stitch-rs` to release tag `v0.3.0` aligning lifecycle and FlowControl contracts.
 
 ## [0.13.0] - 2026-10-06
 

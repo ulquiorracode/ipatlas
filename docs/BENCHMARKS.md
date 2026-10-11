@@ -51,12 +51,12 @@ cargo run --release -- bench dist/ipatlas_goldsrc_firewall_soa.bin -n 1000000
 | Engine & Layout | Target Record / Query Type | Single-Thread QPS | Avg Latency / Throughput-Equivalent | Speedup vs MMDB | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **MaxMind MMDB** | Full Geo Record (Tree Traversal) | ~909,000 QPS | **1,100.0 ns** (Latency) | 1.0x (Baseline) | Standard `maxminddb` reader, pointer-chasing tree |
-| **IPAtlas Compact AoS (v0.16.0)** | Full Geo Record (`lookup_u32`) | **11,742,753 QPS** | **85.2 ns** (Latency) | **12.9x** | 2-Stage Range Lookup (`GuideTableV4` + `cmov`), `Ipv4RangeCompact` |
-| **IPAtlas Compact SoA (v0.16.0)** | Full Geo Record (`lookup_u32`) | **4,719,414 QPS** | **211.9 ns** (Latency) | **5.19x** | Columnar (`ip_from` array + stride `count`/`prof_id`) |
-| **IPAtlas Compact AoS (v0.16.0)** | Country Code Fast Path (`country_code`) | **23,867,259 QPS** | **41.9 ns** (Latency) | **26.2x** | Zero heap allocation, 2-byte ISO code read |
-| **IPAtlas Compact SoA (v0.16.0)** | Country Code Fast Path (`country_code`) | **23,006,276 QPS** | **43.5 ns** (Latency) | **25.3x** | Indirect profile lookup |
-| **IPAtlas Compact AoS (v0.16.0)** | **Flags-Only Fast Path** (`lookup_flags_u32`) | **28,838,306 QPS** | **34.7 ns** (Latency) | **31.7x** | Zero heap allocation, firewall mode (`GeoFlags`) |
-| **IPAtlas Compact SoA (v0.16.0)** | **Flags-Only Fast Path** (`lookup_flags_u32`) | **29,612,958 QPS** | **33.8 ns** (Latency) | **32.5x** | Firewall threat bitmask direct extraction |
+| **IPAtlas Compact AoS (v0.14.0)** | Full Geo Record (`lookup_u32`) | **11,742,753 QPS** | **85.2 ns** (Latency) | **12.9x** | 2-Stage Range Lookup (`GuideTableV4` + `cmov`), `Ipv4RangeCompact` |
+| **IPAtlas Compact SoA (v0.14.0)** | Full Geo Record (`lookup_u32`) | **4,719,414 QPS** | **211.9 ns** (Latency) | **5.19x** | Columnar (`ip_from` array + stride `count`/`prof_id`) |
+| **IPAtlas Compact AoS (v0.14.0)** | Country Code Fast Path (`country_code`) | **23,867,259 QPS** | **41.9 ns** (Latency) | **26.2x** | Zero heap allocation, 2-byte ISO code read |
+| **IPAtlas Compact SoA (v0.14.0)** | Country Code Fast Path (`country_code`) | **23,006,276 QPS** | **43.5 ns** (Latency) | **25.3x** | Indirect profile lookup |
+| **IPAtlas Compact AoS (v0.14.0)** | **Flags-Only Fast Path** (`lookup_flags_u32`) | **28,838,306 QPS** | **34.7 ns** (Latency) | **31.7x** | Zero heap allocation, firewall mode (`GeoFlags`) |
+| **IPAtlas Compact SoA (v0.14.0)** | **Flags-Only Fast Path** (`lookup_flags_u32`) | **29,612,958 QPS** | **33.8 ns** (Latency) | **32.5x** | Firewall threat bitmask direct extraction |
 | **IPAtlas Parallel Rayon** | Compact AoS (16 hardware threads) | **117,594,487 QPS** | **8.5 ns** (Throughput-Eq) | **129.3x** | 16-thread aggregate batch processing ($1 / \text{QPS}$) |
 | **stitch-rs Pipeline** | Full Monomorphic U-Cycle Pipeline | **4,159,759 QPS** | **240.4 ns** (Latency) | **4.57x** | Bogon L1 filter + context + threat policy + telemetry |
 
@@ -105,7 +105,7 @@ Evaluation of decompression latency across chunk boundaries for blocked containe
 
 ### 6.1 The Problem: Legacy Runtime Reconstruction Latency
 
-Prior to `v0.16.0`, when opening an un-indexed container, the reader had to dynamically inspect all 5,318,878 range intervals to build the 65,536-entry Stage 1 Guide Table (`[GuideEntry; 65536]`, 512 KB) in heap memory.
+Prior to `v0.14.0`, when opening an un-indexed container, the reader had to dynamically inspect all 5,318,878 range intervals to build the 65,536-entry Stage 1 Guide Table (`[GuideEntry; 65536]`, 512 KB) in heap memory.
 
 - **Scan overhead**: Linear pass over the 41.28 MB interval table to calculate boundaries for each `/16` prefix.
 - **Heap allocation**: Allocating `Box<[GuideEntry; 65536]>` required **524,288 bytes** of heap RAM.
@@ -113,7 +113,7 @@ Prior to `v0.16.0`, when opening an un-indexed container, the reader had to dyna
 
 ### 6.2 The Solution: Trailing AOT Distribution Footer (`ATFT`)
 
-In `v0.16.0`, IPAtlas bakes the 512 KB guide table directly into the container file during offline compilation, appending a 32-byte descriptor (`ContainerFooter`, magic `ATFT`) at the very end of the file:
+In `v0.14.0`, IPAtlas bakes the 512 KB guide table directly into the container file during offline compilation, appending a 32-byte descriptor (`ContainerFooter`, magic `ATFT`) at the very end of the file:
 
 ```text
 [Header 80B] ... [Intervals] ... [Strings] [Align Pad 0..7B] [Guide Table 512 KB] [ContainerFooter 32B]

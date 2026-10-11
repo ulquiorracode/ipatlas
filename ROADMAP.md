@@ -211,33 +211,7 @@ To prevent maintenance sprawl while maintaining the "Single Source of Truth" rul
 
 ---
 
-## v0.14.0 — Community Gaming Integration: Metamod-P & AMX Mod X Native Module [Planned (No Deadline)]
-
-**Goal:** Provide zero-overhead player geolocation and threat protection for GoldSrc engine dedicated servers (Counter-Strike 1.6, Half-Life) via native Metamod and AMXX native module plugins.
-
-- [ ] **Native C-ABI Metamod Plugin (`ipatlas_mm`)**:
-  - Intercept `ClientConnect` / `ClientPutInServer` engine callbacks with zero tickrate degradation.
-  - Sub-microsecond player country extraction and proxy/VPN/botnet rejection before game slot assignment.
-- [ ] **AMX Mod X Module & Pawn Natives**:
-  - `ipatlas_get_country(id, output[], len)`
-  - `ipatlas_is_threat(id)`
-  - `ipatlas_is_proxy(id)`
-  - Direct zero-copy memory lookup without disk I/O during game ticks.
-
----
-
-## v0.15.0 — Automated Live Feeds & Dynamic Synchronization [Planned (No Deadline)]
-
-**Goal:** Deliver zero-downtime hot database updates from remote URL feeds using atomic pointer swapping.
-
-- [ ] **CLI Scheduled Feed Updater**:
-  - `ipatlas update --feed <url> --target <path> --verify-crc`: Downloads and verifies fresh feeds in the background.
-- [ ] **Sidecar Atomic Auto-Reload (`ipatlas serve --auto-reload`)**:
-  - Integrates `HotReloadDatabase` with `notify` file-watchers to atomically swap in-memory mmap containers on Kubernetes ConfigMap changes without dropping active HTTP connections.
-
----
-
-## v0.16.0 — Ahead-of-Time Distribution Metadata & 2-Stage Range Lookup [Completed]
+## v0.14.0 — Ahead-of-Time Distribution Metadata & 2-Stage Range Lookup [Completed]
 
 **Goal:** Leverage ahead-of-time database compilation to analyze dataset key distribution and inject ultra-compact metadata headers/footers for sub-microsecond zero-copy startup and sub-100ns 2-stage branchless range lookups.
 
@@ -255,7 +229,7 @@ To prevent maintenance sprawl while maintaining the "Single Source of Truth" rul
 
 ---
 
-## v0.17.0 — Core Modular Decomposition & Refactoring [Planned]
+## v0.15.0 — Core Modular Decomposition & Refactoring [Planned]
 
 **Goal:** Decompose bloated monolithic files (`mmap_reader.rs` > 1500 LOC, `writer.rs` > 600 LOC) into clean, single-responsibility submodules while strictly preserving zero-cost abstraction invariants and zero-breaking C-ABI/Rust API contracts.
 
@@ -269,6 +243,32 @@ To prevent maintenance sprawl while maintaining the "Single Source of Truth" rul
 - [ ] **Architectural & Safety Verification**:
   - Zero performance regression across Criterion microbenchmarks and 5.3M queries.
   - Zero clippy warnings with `-D warnings` and strict enforcement of unsafe safety comments (`// SAFETY:`).
+
+---
+
+## v0.16.0 — Automated Live Feeds & Dynamic Synchronization [Planned (No Deadline)]
+
+**Goal:** Deliver zero-downtime hot database updates from remote URL feeds using atomic pointer swapping.
+
+- [ ] **CLI Scheduled Feed Updater**:
+  - `ipatlas update --feed <url> --target <path> --verify-crc`: Downloads and verifies fresh feeds in the background.
+- [ ] **Sidecar Atomic Auto-Reload (`ipatlas serve --auto-reload`)**:
+  - Integrates `HotReloadDatabase` with `notify` file-watchers to atomically swap in-memory mmap containers on Kubernetes ConfigMap changes without dropping active HTTP connections.
+
+---
+
+## v0.17.0 — Community Gaming Integration: Metamod-P & AMX Mod X Native Module [Planned (No Deadline)]
+
+**Goal:** Provide zero-overhead player geolocation and threat protection for GoldSrc engine dedicated servers (Counter-Strike 1.6, Half-Life) via native Metamod and AMXX native module plugins.
+
+- [ ] **Native C-ABI Metamod Plugin (`ipatlas_mm`)**:
+  - Intercept `ClientConnect` / `ClientPutInServer` engine callbacks with zero tickrate degradation.
+  - Sub-microsecond player country extraction and proxy/VPN/botnet rejection before game slot assignment.
+- [ ] **AMX Mod X Module & Pawn Natives**:
+  - `ipatlas_get_country(id, output[], len)`
+  - `ipatlas_is_threat(id)`
+  - `ipatlas_is_proxy(id)`
+  - Direct zero-copy memory lookup without disk I/O during game ticks.
 
 ---
 
