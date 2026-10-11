@@ -6,9 +6,13 @@
 
 use crate::models::{Ipv4Range, Ipv4RangeCompact};
 
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
+
 /// An entry in the /16 Guide Table bounding the search range in the interval array.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Default, FromBytes, IntoBytes, KnownLayout, Immutable,
+)]
 pub struct GuideEntry {
     pub start_idx: u32,
     pub end_idx: u32,
@@ -22,8 +26,13 @@ impl GuideEntry {
 }
 
 /// A 65,536-entry Stage 1 Guide Table for IPv4 /16 prefixes.
-pub struct GuideTableV4 {
-    entries: Box<[GuideEntry; 65536]>,
+/// Can either be zero-copy memory-mapped directly from an on-disk AOT footer (at a byte offset)
+/// or dynamically computed in memory during runtime open.
+pub enum GuideTableV4 {
+    /// Stored directly in mmap buffer at given byte offset.
+    MmapOffset(usize),
+    /// Dynamically allocated in RAM for legacy containers lacking a footer.
+    Owned(Box<[GuideEntry; 65536]>),
 }
 
 impl Default for GuideTableV4 {
@@ -35,19 +44,45 @@ impl Default for GuideTableV4 {
 impl GuideTableV4 {
     /// Creates an empty guide table where all /16 prefixes are empty.
     pub fn new() -> Self {
-        // Allocate zeroed 65536 * 8 bytes = 512 KiB directly on heap
         let entries = vec![GuideEntry::default(); 65536]
             .into_boxed_slice()
             .try_into()
             .unwrap_or_else(|_| panic!("Failed to allocate 65536-element GuideTable"));
-        Self { entries }
+        GuideTableV4::Owned(entries)
+    }
+
+    /// References a pre-validated, aligned 65,536-entry guide table directly at `offset` in mmap.
+    #[inline(always)]
+    pub fn from_mmap_offset(offset: usize) -> Self {
+        GuideTableV4::MmapOffset(offset)
+    }
+
+    /// Returns a direct slice view over the 65,536 entries given the storage buffer.
+    #[inline(always)]
+    pub fn entries<'a>(&'a self, storage: &'a [u8]) -> &'a [GuideEntry] {
+        match self {
+            GuideTableV4::MmapOffset(offset) => {
+                // SAFETY: Alignment, length, and slice bounds were pre-validated during open().
+                unsafe {
+                    std::slice::from_raw_parts(
+                        storage.as_ptr().add(*offset) as *const GuideEntry,
+                        65536,
+                    )
+                }
+            }
+            GuideTableV4::Owned(b) => &b[..],
+        }
     }
 
     /// Builds a GuideTable from a sorted slice of `ip_from` addresses (SoA layout).
     pub fn from_soa_ip_froms(ip_froms: &[u32]) -> Self {
-        let mut table = Self::new();
+        let mut entries = vec![GuideEntry::default(); 65536]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| panic!("Failed to allocate 65536-element GuideTable"));
+
         if ip_froms.is_empty() {
-            return table;
+            return GuideTableV4::Owned(entries);
         }
 
         let total = ip_froms.len() as u32;
@@ -57,28 +92,32 @@ impl GuideTableV4 {
         for (idx, &ip) in ip_froms.iter().enumerate() {
             let prefix = (ip >> 16) as u16;
             while curr_prefix < prefix {
-                table.entries[curr_prefix as usize] = GuideEntry::new(start_idx, idx as u32);
+                entries[curr_prefix as usize] = GuideEntry::new(start_idx, idx as u32);
                 curr_prefix += 1;
                 start_idx = idx as u32;
             }
         }
 
         while (curr_prefix as usize) < 65536 {
-            table.entries[curr_prefix as usize] = GuideEntry::new(start_idx, total);
+            entries[curr_prefix as usize] = GuideEntry::new(start_idx, total);
             if curr_prefix == u16::MAX {
                 break;
             }
             curr_prefix += 1;
         }
 
-        table
+        GuideTableV4::Owned(entries)
     }
 
     /// Builds a GuideTable from a sorted slice of `Ipv4RangeCompact` (AoS layout).
     pub fn from_ranges_compact(ranges: &[Ipv4RangeCompact]) -> Self {
-        let mut table = Self::new();
+        let mut entries = vec![GuideEntry::default(); 65536]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| panic!("Failed to allocate 65536-element GuideTable"));
+
         if ranges.is_empty() {
-            return table;
+            return GuideTableV4::Owned(entries);
         }
 
         let total = ranges.len() as u32;
@@ -88,28 +127,32 @@ impl GuideTableV4 {
         for (idx, r) in ranges.iter().enumerate() {
             let prefix = (r.ip_from >> 16) as u16;
             while curr_prefix < prefix {
-                table.entries[curr_prefix as usize] = GuideEntry::new(start_idx, idx as u32);
+                entries[curr_prefix as usize] = GuideEntry::new(start_idx, idx as u32);
                 curr_prefix += 1;
                 start_idx = idx as u32;
             }
         }
 
         while (curr_prefix as usize) < 65536 {
-            table.entries[curr_prefix as usize] = GuideEntry::new(start_idx, total);
+            entries[curr_prefix as usize] = GuideEntry::new(start_idx, total);
             if curr_prefix == u16::MAX {
                 break;
             }
             curr_prefix += 1;
         }
 
-        table
+        GuideTableV4::Owned(entries)
     }
 
     /// Builds a GuideTable from a sorted slice of `Ipv4Range` (Standard AoS layout).
     pub fn from_ranges_standard(ranges: &[Ipv4Range]) -> Self {
-        let mut table = Self::new();
+        let mut entries = vec![GuideEntry::default(); 65536]
+            .into_boxed_slice()
+            .try_into()
+            .unwrap_or_else(|_| panic!("Failed to allocate 65536-element GuideTable"));
+
         if ranges.is_empty() {
-            return table;
+            return GuideTableV4::Owned(entries);
         }
 
         let total = ranges.len() as u32;
@@ -119,21 +162,21 @@ impl GuideTableV4 {
         for (idx, r) in ranges.iter().enumerate() {
             let prefix = (r.ip_from >> 16) as u16;
             while curr_prefix < prefix {
-                table.entries[curr_prefix as usize] = GuideEntry::new(start_idx, idx as u32);
+                entries[curr_prefix as usize] = GuideEntry::new(start_idx, idx as u32);
                 curr_prefix += 1;
                 start_idx = idx as u32;
             }
         }
 
         while (curr_prefix as usize) < 65536 {
-            table.entries[curr_prefix as usize] = GuideEntry::new(start_idx, total);
+            entries[curr_prefix as usize] = GuideEntry::new(start_idx, total);
             if curr_prefix == u16::MAX {
                 break;
             }
             curr_prefix += 1;
         }
 
-        table
+        GuideTableV4::Owned(entries)
     }
 
     /// Looks up the slice bounds for a given IPv4 address.
@@ -141,9 +184,10 @@ impl GuideTableV4 {
     /// Extends the lower bound by 1 if `start_idx > 0` to safely catch ranges that straddle
     /// across `/16` boundary borders.
     #[inline(always)]
-    pub fn guide_bounds(&self, ip: u32, total_records: usize) -> (usize, usize) {
+    pub fn guide_bounds(&self, storage: &[u8], ip: u32, total_records: usize) -> (usize, usize) {
         let prefix = (ip >> 16) as usize;
-        let entry = self.entries[prefix];
+        let entries = self.entries(storage);
+        let entry = entries[prefix];
         // If range started in previous /16 and straddles boundary, widen lower bound by 1
         let start = if entry.start_idx > 0 {
             (entry.start_idx - 1) as usize
@@ -163,7 +207,7 @@ mod tests {
     #[test]
     fn test_guide_table_empty() {
         let guide = GuideTableV4::from_soa_ip_froms(&[]);
-        let (start, end) = guide.guide_bounds(0x01020304, 0);
+        let (start, end) = guide.guide_bounds(&[], 0x01020304, 0);
         assert_eq!(start, 0);
         assert_eq!(end, 0);
     }
@@ -178,12 +222,12 @@ mod tests {
         let guide = GuideTableV4::from_soa_ip_froms(&ip_froms);
 
         // Query within 1.0.x.x
-        let (start, end) = guide.guide_bounds(0x0100_0050, ip_froms.len());
+        let (start, end) = guide.guide_bounds(&[], 0x0100_0050, ip_froms.len());
         assert_eq!(start, 0);
         assert_eq!(end, 2);
 
         // Query within 2.0.x.x
-        let (start, end) = guide.guide_bounds(0x0200_0010, ip_froms.len());
+        let (start, end) = guide.guide_bounds(&[], 0x0200_0010, ip_froms.len());
         assert_eq!(start, 1); // Widened by 1 for straddle safety
         assert_eq!(end, 3);
     }

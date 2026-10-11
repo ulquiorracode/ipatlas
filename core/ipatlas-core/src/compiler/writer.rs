@@ -8,12 +8,12 @@ use zerocopy::IntoBytes;
 
 use crate::compiler::sweep::{MergedEntry, MergedEntryV6};
 use crate::models::{
-    Crc32, HeaderGen5, Ipv4Range, Ipv4RangeCompact, Ipv6Range, Ipv6RangeSplit64,
-    OptimizationConfig, ProfileGen4, RecordFamily, StorageLayout, HEADER_FLAG_EMBEDDED_ZSTD,
-    HEADER_SIZE_GEN5, MAGIC, PROFILE_SIZE_GEN4, RECORD_SIZE_IPV4_COMPACT,
-    RECORD_SIZE_IPV4_STANDARD, RECORD_SIZE_IPV6_COMPACT, RECORD_SIZE_IPV6_STANDARD,
-    VERSION_V5_COMPACT_AOS, VERSION_V5_COMPACT_SOA, VERSION_V5_STANDARD_AOS,
-    VERSION_V5_STANDARD_SOA,
+    ContainerFooter, Crc32, HeaderGen5, Ipv4Range, Ipv4RangeCompact, Ipv6Range, Ipv6RangeSplit64,
+    OptimizationConfig, ProfileGen4, RecordFamily, StorageLayout, FOOTER_FLAG_GUIDE_V4,
+    HEADER_FLAG_EMBEDDED_ZSTD, HEADER_SIZE_GEN5, MAGIC, PROFILE_SIZE_GEN4,
+    RECORD_SIZE_IPV4_COMPACT, RECORD_SIZE_IPV4_STANDARD, RECORD_SIZE_IPV6_COMPACT,
+    RECORD_SIZE_IPV6_STANDARD, VERSION_V5_COMPACT_AOS, VERSION_V5_COMPACT_SOA,
+    VERSION_V5_STANDARD_AOS, VERSION_V5_STANDARD_SOA,
 };
 
 #[derive(Default)]
@@ -561,6 +561,32 @@ impl DatabaseWriter {
                 let inner_file = writer.get_mut();
                 inner_file.seek(SeekFrom::Start(76))?;
                 inner_file.write_all(&calculated_crc32.to_le_bytes())?;
+
+                // Build and bake AOT Distribution Footer (512 KB Stage 1 Guide Table + Footer descriptor)
+                let guide_table = match &self.storage {
+                    RangeStorage::Compact(vec) => {
+                        crate::reader::guide::GuideTableV4::from_ranges_compact(vec)
+                    }
+                    RangeStorage::Standard(vec) => {
+                        crate::reader::guide::GuideTableV4::from_ranges_standard(vec)
+                    }
+                };
+                let guide_entries = guide_table.entries(&[]);
+                let guide_bytes = guide_entries.as_bytes();
+                let guide_len = guide_bytes.len() as u32;
+
+                // Seek to the end of the file (after ISP string blob) to append footer
+                let raw_end = inner_file.seek(SeekFrom::End(0))?;
+                let align_pad = ((8 - (raw_end % 8)) % 8) as usize;
+                if align_pad > 0 {
+                    inner_file.write_all(&vec![0u8; align_pad])?;
+                }
+                let guide_offset = inner_file.stream_position()?;
+                inner_file.write_all(guide_bytes)?;
+
+                let footer =
+                    ContainerFooter::new(guide_offset, guide_len, 0, 0, FOOTER_FLAG_GUIDE_V4);
+                inner_file.write_all(footer.as_bytes())?;
                 inner_file.sync_all()?;
             }
 
