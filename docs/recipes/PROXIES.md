@@ -9,6 +9,7 @@ This document provides drop-in configuration snippets for embedding **IPAtlas** 
 Zero-copy direct C-ABI binding in Nginx worker processes without external C module compilation.
 
 ### `nginx.conf`
+
 ```nginx
 http {
     # 1. Preload IPAtlas C-ABI shared library on worker init
@@ -66,6 +67,7 @@ http {
 Deploy `ipatlas serve` as a sidecar container in Kubernetes and wire Envoy's `ext_authz` filter.
 
 ### `envoy.yaml`
+
 ```yaml
 static_resources:
   listeners:
@@ -114,6 +116,7 @@ static_resources:
 Forward request verification to the local IPAtlas sidecar:
 
 ### `Caddyfile`
+
 ```caddy
 example.com {
     # 1. Forward verification subrequest to IPAtlas Sidecar

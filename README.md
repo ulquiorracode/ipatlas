@@ -168,6 +168,7 @@ GeoIP and threat intelligence datasets (e.g. MaxMind MMDB, IP2Location, IP2Proxy
     - **IPv6 Split-64 Compact (16B, Opt-in [Lossy])**: `Ipv6RangeSplit64` (`from_hi: u64, count_hi: u32, profile_id: u32`), 4 records per 64B cache line with 0% straddling (-55.6% size, over-approximates sub-/64 intervals).
     - **Gen5 Succinct (Experimental [Bench-Only])**: Elias-Fano compressed monotone bitvectors reaching ~100% of theoretical Shannon entropy floor (offline evaluation prototype).
 - **2-Stage Range Lookup Engine (`GuideTableV4` + `cmov`)**: $O(1)$ prefix guidance isolating candidate slices down to $\le 64$ entries, coupled with branchless `cmov` search and hardware prefetch hints.
+- **AOT Distribution Footer (`ATFT`)**: Bakes the 512 KB guide table directly into container files, shrinking initialization time by **99.8% (from 17.6 ms down to 39 µs)** with strictly **0 bytes** heap allocation.
 - **Streaming 1D-Sweep Compiler**: Single $O(N + M)$ streaming sweep merging IP2Location and IP2Proxy without loading whole input CSVs into RAM.
 - **Zero-Data-Loss Guarantee**: Preserves disjoint threat ranges occurring outside IP2Location Geo coverage.
 - **Universal Dataset Support**: Dynamic column detection for all IP2Location (`DB1`, `DB3`, `DB5`, `DB11`) and IP2Proxy (`PX1` – `PX12`) formats.
