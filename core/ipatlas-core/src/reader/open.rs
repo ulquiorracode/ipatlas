@@ -370,6 +370,16 @@ impl ReaderInitializer {
             (None, Self::build_fallback_guide(&dispatch, &storage))
         };
 
+        #[cfg(unix)]
+        {
+            if let StorageBuffer::Mmap(ref m) = storage {
+                // SAFETY: mmap is valid and mapped, advises kernel for binary search access pattern.
+                unsafe {
+                    libc::madvise(m.as_ptr() as *mut libc::c_void, m.len(), libc::MADV_RANDOM);
+                }
+            }
+        }
+
         let reader = IpAtlasReader::new_raw(
             storage,
             header,
@@ -383,16 +393,6 @@ impl ReaderInitializer {
             guide_v4,
             footer,
         );
-
-        #[cfg(unix)]
-        {
-            if let StorageBuffer::Mmap(ref m) = reader.storage_buffer() {
-                // SAFETY: mmap is valid and mapped, advises kernel for binary search access pattern.
-                unsafe {
-                    libc::madvise(m.as_ptr() as *mut libc::c_void, m.len(), libc::MADV_RANDOM);
-                }
-            }
-        }
 
         Ok(reader)
     }

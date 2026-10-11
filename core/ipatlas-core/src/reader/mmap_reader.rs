@@ -320,7 +320,7 @@ impl IpAtlasReader {
         }
     }
 
-    /// Alias for [`soa_counts_v4`].
+    /// Alias for [`Self::soa_counts_v4`].
     #[inline(always)]
     pub fn soa_counts_compact_v4(&self) -> &[u16] {
         self.soa_counts_v4()
