@@ -1,5 +1,6 @@
 pub mod crc;
 pub mod features;
+pub mod footer;
 pub mod header;
 pub mod optimization;
 pub mod presets;
@@ -9,6 +10,9 @@ pub mod record;
 
 pub use crc::{compute_crc32, Crc32};
 pub use features::FeatureMask;
+pub use footer::{
+    ContainerFooter, FOOTER_FLAG_BOGON_RLE, FOOTER_FLAG_GUIDE_V4, FOOTER_INDEX_SIZE, FOOTER_MAGIC,
+};
 pub use header::{
     ContainerVersion, HeaderGen4, HeaderGen5, HeaderV4, HeaderV5, RecordFamily, StorageLayout,
     HEADER_FLAG_EMBEDDED_ZSTD, HEADER_FLAG_SOA_V6, HEADER_SIZE_GEN4, HEADER_SIZE_GEN5,

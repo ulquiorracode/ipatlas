@@ -5,12 +5,12 @@ use std::path::Path;
 use zerocopy::FromBytes;
 
 use crate::models::{
-    compute_crc32, GeoFlags, GeoRecord, GeoRecordRef, HeaderV4, HeaderV5, Ipv4Range,
-    Ipv4RangeCompact, Ipv6Range, Ipv6RangeSplit64, ProfileGen4, RecordFamily, StorageLayout,
-    HEADER_SIZE_V4, HEADER_SIZE_V5, MAGIC, PROFILE_SIZE_V4, RECORD_SIZE_V4_COMPACT,
-    RECORD_SIZE_V4_STANDARD, VERSION_V4_COMPACT_AOS, VERSION_V4_COMPACT_SOA, VERSION_V4_STANDARD,
-    VERSION_V4_STANDARD_AOS, VERSION_V4_STANDARD_SOA, VERSION_V5_COMPACT_AOS,
-    VERSION_V5_COMPACT_SOA, VERSION_V5_STANDARD, VERSION_V5_STANDARD_SOA,
+    compute_crc32, ContainerFooter, GeoFlags, GeoRecord, GeoRecordRef, HeaderV4, HeaderV5,
+    Ipv4Range, Ipv4RangeCompact, Ipv6Range, Ipv6RangeSplit64, ProfileGen4, RecordFamily,
+    StorageLayout, FOOTER_INDEX_SIZE, FOOTER_MAGIC, HEADER_SIZE_V4, HEADER_SIZE_V5, MAGIC,
+    PROFILE_SIZE_V4, RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD, VERSION_V4_COMPACT_AOS,
+    VERSION_V4_COMPACT_SOA, VERSION_V4_STANDARD, VERSION_V4_STANDARD_AOS, VERSION_V4_STANDARD_SOA,
+    VERSION_V5_COMPACT_AOS, VERSION_V5_COMPACT_SOA, VERSION_V5_STANDARD, VERSION_V5_STANDARD_SOA,
 };
 pub use crate::reader::buffer::StorageBuffer;
 pub(crate) use crate::reader::dispatch::{TableDispatch, TableDispatchV6};
@@ -36,6 +36,7 @@ pub struct IpAtlasReader {
     regions: StringTableRef,
     isps: StringTableRef,
     guide_v4: crate::reader::guide::GuideTableV4,
+    footer: Option<ContainerFooter>,
 }
 
 impl std::fmt::Debug for IpAtlasReader {
@@ -371,7 +372,76 @@ impl IpAtlasReader {
             }
         };
 
-        let guide_v4 = match &dispatch {
+        // Determine minimum payload end boundary (end of ISP string blob)
+        let min_payload_end = (isps.data_start + isps.data_len) as u64;
+
+        // Stage 1: Detect optional AOT Distribution Footer in the last 32 bytes of storage
+        let (footer, guide_v4) = if raw_buf.len() >= min_payload_end as usize + FOOTER_INDEX_SIZE {
+            let footer_bytes = &raw_buf[raw_buf.len() - FOOTER_INDEX_SIZE..];
+            if footer_bytes.ends_with(&FOOTER_MAGIC) {
+                if let Ok(f) = ContainerFooter::read_from_bytes(footer_bytes) {
+                    if f.validate(raw_buf.len() as u64, min_payload_end).is_ok() && f.has_guide_v4()
+                    {
+                        let g_off = f.guide_offset as usize;
+                        let g_len = f.guide_len as usize;
+                        if g_off + g_len <= raw_buf.len() - FOOTER_INDEX_SIZE
+                            && <[crate::reader::guide::GuideEntry]>::ref_from_bytes(
+                                &raw_buf[g_off..g_off + g_len],
+                            )
+                            .is_ok()
+                        {
+                            (
+                                Some(f),
+                                crate::reader::guide::GuideTableV4::from_mmap_offset(g_off),
+                            )
+                        } else {
+                            (None, Self::build_fallback_guide(&dispatch, &storage))
+                        }
+                    } else {
+                        (None, Self::build_fallback_guide(&dispatch, &storage))
+                    }
+                } else {
+                    (None, Self::build_fallback_guide(&dispatch, &storage))
+                }
+            } else {
+                (None, Self::build_fallback_guide(&dispatch, &storage))
+            }
+        } else {
+            (None, Self::build_fallback_guide(&dispatch, &storage))
+        };
+
+        let reader = Self {
+            mmap: storage,
+            header,
+            dispatch,
+            dispatch_v6,
+            prof_start,
+            prof_count,
+            cities,
+            regions,
+            isps,
+            guide_v4,
+            footer,
+        };
+
+        #[cfg(unix)]
+        {
+            if let StorageBuffer::Mmap(ref m) = reader.mmap {
+                // SAFETY: mmap is valid and mapped, advises kernel for binary search access pattern.
+                unsafe {
+                    libc::madvise(m.as_ptr() as *mut libc::c_void, m.len(), libc::MADV_RANDOM);
+                }
+            }
+        }
+
+        Ok(reader)
+    }
+
+    fn build_fallback_guide(
+        dispatch: &TableDispatch,
+        storage: &StorageBuffer,
+    ) -> crate::reader::guide::GuideTableV4 {
+        match dispatch {
             TableDispatch::V4StandardSoa {
                 ip_from_off, count, ..
             }
@@ -413,46 +483,36 @@ impl IpAtlasReader {
                 crate::reader::guide::GuideTableV4::from_ranges_standard(ranges)
             }
             TableDispatch::Empty => crate::reader::guide::GuideTableV4::new(),
-        };
-
-        let reader = Self {
-            mmap: storage,
-            header,
-            dispatch,
-            dispatch_v6,
-            prof_start,
-            prof_count,
-            cities,
-            regions,
-            isps,
-            guide_v4,
-        };
-
-        #[cfg(unix)]
-        {
-            if let StorageBuffer::Mmap(ref m) = reader.mmap {
-                // SAFETY: mmap is valid and mapped, advises kernel for binary search access pattern.
-                unsafe {
-                    libc::madvise(m.as_ptr() as *mut libc::c_void, m.len(), libc::MADV_RANDOM);
-                }
-            }
         }
-
-        Ok(reader)
     }
 
     /// Verifies CRC32 checksum of the database against the header checksum (Generation V5).
     pub fn validate_checksum(&self) -> Result<(), ReaderError> {
         if let HeaderVariant::V5(h) = &self.header {
-            let actual = compute_crc32(&self.mmap[HEADER_SIZE_V5..]);
-            if actual != h.crc32 {
+            // In uncompressed containers, payload CRC covers bytes up to the end of the ISP blob.
+            let payload_end = (self.isps.data_start + self.isps.data_len).min(self.mmap.len());
+            let expected_crc = h.crc32;
+            let actual = compute_crc32(&self.mmap[HEADER_SIZE_V5..payload_end]);
+            if actual != expected_crc {
                 return Err(ReaderError::CrcMismatch {
-                    expected: h.crc32,
+                    expected: expected_crc,
                     actual,
                 });
             }
         }
         Ok(())
+    }
+
+    /// Returns the optional AOT Distribution Footer descriptor if present.
+    #[inline(always)]
+    pub fn footer(&self) -> Option<&ContainerFooter> {
+        self.footer.as_ref()
+    }
+
+    /// Returns true if the database container contains an AOT Distribution Footer.
+    #[inline(always)]
+    pub fn has_footer(&self) -> bool {
+        self.footer.is_some()
     }
 
     /// Returns the underlying database header variant.
@@ -868,7 +928,7 @@ impl IpAtlasReader {
                     return None;
                 }
                 // Stage 1: Guide Table bounds narrowing
-                let (start, end) = self.guide_v4.guide_bounds(ip, count);
+                let (start, end) = self.guide_v4.guide_bounds(&self.mmap, ip, count);
                 if start >= end {
                     return None;
                 }
@@ -918,7 +978,7 @@ impl IpAtlasReader {
                 if count == 0 {
                     return None;
                 }
-                let (start, end) = self.guide_v4.guide_bounds(ip, count);
+                let (start, end) = self.guide_v4.guide_bounds(&self.mmap, ip, count);
                 if start >= end {
                     return None;
                 }
@@ -959,7 +1019,7 @@ impl IpAtlasReader {
                 if count == 0 {
                     return None;
                 }
-                let (start, end) = self.guide_v4.guide_bounds(ip, count);
+                let (start, end) = self.guide_v4.guide_bounds(&self.mmap, ip, count);
                 if start >= end {
                     return None;
                 }
@@ -989,7 +1049,7 @@ impl IpAtlasReader {
                 if count == 0 {
                     return None;
                 }
-                let (start, end) = self.guide_v4.guide_bounds(ip, count);
+                let (start, end) = self.guide_v4.guide_bounds(&self.mmap, ip, count);
                 if start >= end {
                     return None;
                 }

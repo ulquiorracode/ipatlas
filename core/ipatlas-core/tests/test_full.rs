@@ -52,6 +52,13 @@ fn test_compile_and_lookup_full() {
 
     let reader = IpAtlasReader::open(&out_bin).unwrap();
     assert_eq!(reader.len(), 5);
+    assert!(
+        reader.has_footer(),
+        "Compiled container must include AOT Distribution Footer"
+    );
+    let footer = reader.footer().expect("Footer must be present");
+    assert!(footer.has_guide_v4());
+    assert_eq!(footer.guide_len(), 524288);
 
     // 1. Clean residential US
     let res_us = reader.lookup_str("1.0.5.10").expect("US record not found");
