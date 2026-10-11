@@ -2,7 +2,7 @@ pub(crate) mod branchless;
 pub mod buffer;
 pub(crate) mod dispatch;
 pub mod error;
-pub(crate) mod guide;
+pub mod guide;
 #[cfg(feature = "hot-reload")]
 pub mod hot_reload;
 pub mod mmap_reader;

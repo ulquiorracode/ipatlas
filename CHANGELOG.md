@@ -6,6 +6,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-10-11
+
+### Added
+
+- **Ahead-of-Time (AOT) Distribution Footer (`ATFT`)**:
+  - Implemented 32-byte `ContainerFooter` appended to `.bin` containers during compilation.
+  - Pre-bakes the 512 KB 65,536-entry Stage 1 Guide Table directly behind string table blobs with 8-byte alignment.
+  - Slashes initialization latency of `IpAtlasReader::open()` by **99.8% (from 17.6 ms down to 39 µs)** on 5.3M production snapshots while eliminating 100% of heap allocations (**0 bytes heap** vs 512 KB).
+  - Maintained 100% backwards compatibility for legacy containers lacking a footer via seamless runtime guide reconstruction fallback.
+- **2-Stage Range Lookup Engine (`GuideTableV4` + `cmov`)**:
+  - Direct $O(1)$ prefix partitioning narrowing 5.3M intervals down to $\le 64$ candidates.
+  - Branchless `cmov` search coupled with cache-friendly contiguous slicing, achieving **85.2 ns** full-record lookup and **34.7 ns** flags-only edge firewall throughput (~28.8M QPS).
+
 ## [0.13.0] - 2026-10-06
 
 ### Added

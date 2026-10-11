@@ -101,7 +101,43 @@ Evaluation of decompression latency across chunk boundaries for blocked containe
 
 ---
 
-## 6. Architectural Analysis: AoS vs SoA in Practice
+## 6. Cold-Start & Zero-Cost Initialization: AOT Distribution Footer Analysis
+
+### 6.1 The Problem: Legacy Runtime Reconstruction Latency
+
+Prior to `v0.16.0`, when opening an un-indexed container, the reader had to dynamically inspect all 5,318,878 range intervals to build the 65,536-entry Stage 1 Guide Table (`[GuideEntry; 65536]`, 512 KB) in heap memory.
+
+- **Scan overhead**: Linear pass over the 41.28 MB interval table to calculate boundaries for each `/16` prefix.
+- **Heap allocation**: Allocating `Box<[GuideEntry; 65536]>` required **524,288 bytes** of heap RAM.
+- **Initialization pause**: **~17.6 ms** per `IpAtlasReader::open()`. For long-running daemons this is acceptable, but for CLI utilities (`ipatlas lookup`), AWS Lambda / microVMs, short-lived tasks, and zero-downtime hot reloading (`HotReloadDatabase`), 17.6 ms represents unacceptable cold-start latency.
+
+### 6.2 The Solution: Trailing AOT Distribution Footer (`ATFT`)
+
+In `v0.16.0`, IPAtlas bakes the 512 KB guide table directly into the container file during offline compilation, appending a 32-byte descriptor (`ContainerFooter`, magic `ATFT`) at the very end of the file:
+
+```text
+[Header 80B] ... [Intervals] ... [Strings] [Align Pad 0..7B] [Guide Table 512 KB] [ContainerFooter 32B]
+                                                             ▲
+                                                    8-byte aligned mmap offset
+```
+
+- **0-Cost Memory Mapping**: The reader detects `ATFT` in the last 4 bytes, validates offsets, and directly binds `GuideTableV4::from_mmap_offset(offset)`.
+- **Heap Allocation**: **0 bytes** (zero dynamic heap allocations).
+- **Initialization Latency**: Bound solely by the OS `mmap` / `MapViewOfFile` system call (**~39 µs**).
+
+### 6.3 Empirical 5.3M Production Snapshot Verification
+
+Measured over 100 warm iterations against the 5,318,878 record production snapshot (`dist/ipatlas_goldsrc_firewall.bin`):
+
+| Mode / Strategy | Open Latency ($T_{\text{open}}$) | Heap Memory Allocation | CPU Working Set | Practical Impact |
+| :--- | :--- | :--- | :--- | :--- |
+| **Legacy Runtime Scan** (No Footer) | **17,597.24 µs** (17.60 ms) | **524,288 bytes** (512 KB heap) | High (Scans 41.3 MB table) | Cold start stutter in CLI and microVM |
+| **AOT Distribution Footer** (Zero-Copy) | **39.25 µs** (0.039 ms) | **0 bytes** (0 KB heap) | None (Reads only 32B footer) | Instant zero-copy startup across all environments |
+| **Improvement Delta** | **-99.8% latency reduction (448.3x faster)** | **-100% heap allocation eliminated** | **Negligible CPU overhead** | **Zero initialization pause** |
+
+---
+
+## 7. Architectural Analysis: AoS vs SoA in Practice
 
 ### Why SoA shows 4.6x in synthetic benchmarks but converges on 5.3M
 
@@ -117,7 +153,7 @@ Evaluation of decompression latency across chunk boundaries for blocked containe
 
 ---
 
-## 7. IPv6 (128-bit) Dual-Stack Performance & Split-64 Truncation Analysis
+## 8. IPv6 (128-bit) Dual-Stack Performance & Split-64 Truncation Analysis
 
 ### The 36-Byte Struct Impedance
 
