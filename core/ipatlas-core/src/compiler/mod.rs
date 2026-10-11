@@ -2,11 +2,14 @@ pub mod adapters;
 pub mod eytzinger;
 pub mod parser;
 pub mod spi;
+pub mod string_pool;
 pub mod succinct;
 pub mod sweep;
 pub mod writer;
 
 pub use spi::{DatasetIngestionAdapter, IngestRecordV4, IngestRecordV6};
+pub use string_pool::StringPool;
+pub use writer::{CompilationStats, DatabaseWriter};
 
 use std::path::Path;
 use thiserror::Error;
@@ -16,7 +19,6 @@ use crate::compiler::parser::{
     RawGeoRecordV6, RawPxRecord, RawPxRecordV6,
 };
 use crate::compiler::sweep::{SweepLineMerger, SweepLineMergerV6};
-pub use crate::compiler::writer::{CompilationStats, DatabaseWriter, StringPool};
 use crate::models::{FeatureMask, OptimizationConfig, Preset};
 
 #[derive(Error, Debug)]

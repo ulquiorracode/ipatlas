@@ -229,18 +229,17 @@ To prevent maintenance sprawl while maintaining the "Single Source of Truth" rul
 
 ---
 
-## v0.15.0 — Core Modular Decomposition & Refactoring [Planned]
+## v0.15.0 — Core Modular Decomposition & Refactoring [Completed]
 
 **Goal:** Decompose bloated monolithic files (`mmap_reader.rs` > 1500 LOC, `writer.rs` > 600 LOC) into clean, single-responsibility submodules while strictly preserving zero-cost abstraction invariants and zero-breaking C-ABI/Rust API contracts.
 
-- [ ] **Reader Modular Decomposition (`core/ipatlas-core/src/reader/`)**:
+- [x] **Reader Modular Decomposition (`core/ipatlas-core/src/reader/`)**:
   - `reader/open.rs`: Container validation, magic bytes, version dispatch, and trailing AOT footer extraction.
   - `reader/dispatch.rs`: Internal raw binary search dispatch across all 8 TableDispatch variants (`lookup_raw_v4`, `lookup_raw_v6`).
-  - `reader/facade.rs` / `mmap_reader.rs`: Clean public API facade (`lookup_u32`, `lookup_flags_u32`, `lookup_addr`, `is_datacenter`, iterators).
-- [ ] **Compiler Modular Decomposition (`core/ipatlas-core/src/compiler/`)**:
-  - `compiler/footer.rs`: Dedicated footer emission, alignment padding, and checksum finalization logic extracted from `writer.rs`.
-  - `compiler/pools.rs`: String deduplication pool and Last-Value Cache (LVC) isolation.
-- [ ] **Architectural & Safety Verification**:
+  - `reader/mmap_reader.rs`: Clean public API facade (`lookup_u32`, `lookup_flags_u32`, `lookup_addr`, `is_datacenter`, iterators).
+- [x] **Compiler Modular Decomposition (`core/ipatlas-core/src/compiler/`)**:
+  - `compiler/string_pool.rs`: String deduplication pool and Last-Value Cache (LVC) isolation.
+- [x] **Architectural & Safety Verification**:
   - Zero performance regression across Criterion microbenchmarks and 5.3M queries.
   - Zero clippy warnings with `-D warnings` and strict enforcement of unsafe safety comments (`// SAFETY:`).
 
