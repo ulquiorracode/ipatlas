@@ -308,21 +308,21 @@ fn bench_lookups(c: &mut Criterion) {
         compile(opts).unwrap();
         (dir, out_bin)
     };
-    let reader_gen6 = IpAtlasReader::open(&bin_path_gen6).unwrap();
+    let reader_col = IpAtlasReader::open(&bin_path_gen6).unwrap();
 
-    group.bench_function("gen6_columnar_stitch_lookup_u32", |b| {
+    group.bench_function("columnar_lookup_u32", |b| {
         b.iter(|| {
-            let res = reader_gen6.lookup_u32(black_box(target_u32));
+            let res = reader_col.lookup_u32(black_box(target_u32));
             black_box(res)
         });
     });
 
-    let mut gen6_hit_idx = 0;
-    group.bench_function("gen6_columnar_stitch_random_hit_u32", |b| {
+    let mut col_hit_idx = 0;
+    group.bench_function("columnar_random_hit_u32", |b| {
         b.iter(|| {
-            let ip = random_hit_ips[gen6_hit_idx % random_hit_ips.len()];
-            gen6_hit_idx = gen6_hit_idx.wrapping_add(1);
-            let res = reader_gen6.lookup_u32(black_box(ip));
+            let ip = random_hit_ips[col_hit_idx % random_hit_ips.len()];
+            col_hit_idx = col_hit_idx.wrapping_add(1);
+            let res = reader_col.lookup_u32(black_box(ip));
             black_box(res)
         });
     });
