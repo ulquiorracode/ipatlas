@@ -12,9 +12,11 @@ use crate::models::{
     OptimizationConfig, ProfileGen4, RecordFamily, StorageLayout, FOOTER_FLAG_GUIDE_V4,
     HEADER_FLAG_EMBEDDED_ZSTD, HEADER_SIZE_GEN5, MAGIC, PROFILE_SIZE_GEN4,
     RECORD_SIZE_IPV4_COMPACT, RECORD_SIZE_IPV4_STANDARD, RECORD_SIZE_IPV6_COMPACT,
-    RECORD_SIZE_IPV6_STANDARD, VERSION_V5_COMPACT_AOS, VERSION_V5_COMPACT_SOA,
+    RECORD_SIZE_IPV6_STANDARD, VERSION_V5_COLUMNAR, VERSION_V5_COMPACT_AOS, VERSION_V5_COMPACT_SOA,
     VERSION_V5_STANDARD_AOS, VERSION_V5_STANDARD_SOA,
 };
+use stitch_data::prelude::*;
+use stitch_data::{encode_u32_column, ColumnCodecTag, ColumnarBlockWriter, ContainerWriter};
 
 pub use crate::compiler::string_pool::StringPool;
 
@@ -218,25 +220,157 @@ impl DatabaseWriter {
         };
         let profile_count = self.profiles.len() as u32;
 
-        let record_size_v4 = if is_compact {
-            RECORD_SIZE_IPV4_COMPACT
-        } else {
-            RECORD_SIZE_IPV4_STANDARD
-        };
         let record_size_v6 = if is_compact_v6 {
             RECORD_SIZE_IPV6_COMPACT
         } else {
             RECORD_SIZE_IPV6_STANDARD
         };
 
-        let version = match (is_compact, is_soa) {
-            (true, true) => VERSION_V5_COMPACT_SOA,
-            (true, false) => VERSION_V5_COMPACT_AOS,
-            (false, true) => VERSION_V5_STANDARD_SOA,
-            (false, false) => VERSION_V5_STANDARD_AOS,
+        let is_stitch = self.opt.layout == StorageLayout::Columnar;
+
+        let mut stitch_container_buf = Vec::new();
+        if is_stitch {
+            let mut container_writer =
+                ContainerWriter::new(&mut stitch_container_buf, 0x1FA7_1A56_0006, 0)
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+            let chunk_size = 64;
+            let mut scratch = vec![0u32; chunk_size];
+            let mut col_buf = vec![0u8; chunk_size * 5];
+            let mut payload_buf = vec![0u8; chunk_size * 16];
+            let mut frame_buf = vec![0u8; chunk_size * 16];
+
+            match &self.storage {
+                RangeStorage::Standard(vec) => {
+                    for chunk in vec.chunks(chunk_size) {
+                        let first_key = chunk[0].ip_from as u64;
+                        let mut block_writer =
+                            ColumnarBlockWriter::new(chunk.len(), 3, &mut payload_buf)
+                                .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+                        let col0: Vec<u32> = chunk.iter().map(|r| r.ip_from).collect();
+                        let col0_len = encode_u32_column(&col0, &mut scratch, &mut col_buf)
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+                        block_writer
+                            .write_column(ColumnCodecTag::AdaptiveU32, &col_buf[..col0_len])
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+                        let col1: Vec<u32> =
+                            chunk.iter().map(|r| r.ip_to - r.ip_from + 1).collect();
+                        let col1_len = encode_u32_column(&col1, &mut scratch, &mut col_buf)
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+                        block_writer
+                            .write_column(ColumnCodecTag::AdaptiveU32, &col_buf[..col1_len])
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+                        let col2: Vec<u32> = chunk.iter().map(|r| r.profile_id).collect();
+                        let col2_len = encode_u32_column(&col2, &mut scratch, &mut col_buf)
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+                        block_writer
+                            .write_column(ColumnCodecTag::AdaptiveU32, &col_buf[..col2_len])
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+                        let payload_len = block_writer
+                            .finish()
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+                        let header = FrameHeader {
+                            profile: OptimizationProfile::Balanced,
+                            flags: FrameFlags::default(),
+                            payload_len,
+                            schema_hash: None,
+                        };
+                        let frame_len =
+                            pack_frame(&header, &payload_buf[..payload_len], &mut frame_buf)
+                                .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+                        container_writer
+                            .write_chunk(first_key, chunk.len(), &frame_buf[..frame_len])
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+                    }
+                }
+                RangeStorage::Compact(vec) => {
+                    for chunk in vec.chunks(chunk_size) {
+                        let first_key = chunk[0].ip_from as u64;
+                        let mut block_writer =
+                            ColumnarBlockWriter::new(chunk.len(), 3, &mut payload_buf)
+                                .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+                        let col0: Vec<u32> = chunk.iter().map(|r| r.ip_from).collect();
+                        let col0_len = encode_u32_column(&col0, &mut scratch, &mut col_buf)
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+                        block_writer
+                            .write_column(ColumnCodecTag::AdaptiveU32, &col_buf[..col0_len])
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+                        let col1: Vec<u32> = chunk.iter().map(|r| r.count as u32).collect();
+                        let col1_len = encode_u32_column(&col1, &mut scratch, &mut col_buf)
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+                        block_writer
+                            .write_column(ColumnCodecTag::AdaptiveU32, &col_buf[..col1_len])
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+                        let col2: Vec<u32> = chunk.iter().map(|r| r.profile_id as u32).collect();
+                        let col2_len = encode_u32_column(&col2, &mut scratch, &mut col_buf)
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+                        block_writer
+                            .write_column(ColumnCodecTag::AdaptiveU32, &col_buf[..col2_len])
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+                        let payload_len = block_writer
+                            .finish()
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+                        let header = FrameHeader {
+                            profile: OptimizationProfile::Balanced,
+                            flags: FrameFlags::default(),
+                            payload_len,
+                            schema_hash: None,
+                        };
+                        let frame_len =
+                            pack_frame(&header, &payload_buf[..payload_len], &mut frame_buf)
+                                .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+                        container_writer
+                            .write_chunk(first_key, chunk.len(), &frame_buf[..frame_len])
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
+                    }
+                }
+            }
+            container_writer
+                .finish()
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+        }
+
+        let is_stitch = self.opt.layout == StorageLayout::Columnar;
+        let align_pad = if is_stitch {
+            (4 - (stitch_container_buf.len() % 4)) % 4
+        } else {
+            0
         };
 
-        let records_v4_bytes = (total_records_v4 as usize) * (record_size_v4 as usize);
+        let record_size_v4 = if is_stitch {
+            align_pad as u16
+        } else if is_compact {
+            RECORD_SIZE_IPV4_COMPACT
+        } else {
+            RECORD_SIZE_IPV4_STANDARD
+        };
+
+        let version = if is_stitch {
+            VERSION_V5_COLUMNAR
+        } else {
+            match (is_compact, is_soa) {
+                (true, true) => VERSION_V5_COMPACT_SOA,
+                (true, false) => VERSION_V5_COMPACT_AOS,
+                (false, true) => VERSION_V5_STANDARD_SOA,
+                (false, false) => VERSION_V5_STANDARD_AOS,
+            }
+        };
+
+        let records_v4_bytes = if is_stitch {
+            stitch_container_buf.len() + align_pad
+        } else {
+            (total_records_v4 as usize) * (record_size_v4 as usize)
+        };
         let records_v6_bytes = (total_records_v6 as usize) * (record_size_v6 as usize);
         let prof_size = (profile_count as usize) * PROFILE_SIZE_GEN4;
 
@@ -392,7 +526,15 @@ impl DatabaseWriter {
                 let mut crc = Crc32::new();
 
                 // Write and CRC IPv4 ranges
-                if is_soa {
+                if is_stitch {
+                    crc.update(&stitch_container_buf);
+                    writer.write_all(&stitch_container_buf)?;
+                    if align_pad > 0 {
+                        let pad_bytes = &[0u8; 4][..align_pad];
+                        crc.update(pad_bytes);
+                        writer.write_all(pad_bytes)?;
+                    }
+                } else if is_soa {
                     match &self.storage {
                         RangeStorage::Compact(vec) => {
                             for r in vec {
@@ -508,31 +650,33 @@ impl DatabaseWriter {
                 inner_file.seek(SeekFrom::Start(76))?;
                 inner_file.write_all(&calculated_crc32.to_le_bytes())?;
 
-                // Build and bake AOT Distribution Footer (512 KB Stage 1 Guide Table + Footer descriptor)
-                let guide_table = match &self.storage {
-                    RangeStorage::Compact(vec) => {
-                        crate::reader::guide::GuideTableV4::from_ranges_compact(vec)
-                    }
-                    RangeStorage::Standard(vec) => {
-                        crate::reader::guide::GuideTableV4::from_ranges_standard(vec)
-                    }
-                };
-                let guide_entries = guide_table.entries(&[]);
-                let guide_bytes = guide_entries.as_bytes();
-                let guide_len = guide_bytes.len() as u32;
+                // Build and bake AOT Distribution Footer for flat layouts
+                if !is_stitch {
+                    let guide_table = match &self.storage {
+                        RangeStorage::Compact(vec) => {
+                            crate::reader::guide::GuideTableV4::from_ranges_compact(vec)
+                        }
+                        RangeStorage::Standard(vec) => {
+                            crate::reader::guide::GuideTableV4::from_ranges_standard(vec)
+                        }
+                    };
+                    let guide_entries = guide_table.entries(&[]);
+                    let guide_bytes = guide_entries.as_bytes();
+                    let guide_len = guide_bytes.len() as u32;
 
-                // Seek to the end of the file (after ISP string blob) to append footer
-                let raw_end = inner_file.seek(SeekFrom::End(0))?;
-                let align_pad = ((8 - (raw_end % 8)) % 8) as usize;
-                if align_pad > 0 {
-                    inner_file.write_all(&vec![0u8; align_pad])?;
+                    // Seek to the end of the file (after ISP string blob) to append footer
+                    let raw_end = inner_file.seek(SeekFrom::End(0))?;
+                    let align_pad = ((8 - (raw_end % 8)) % 8) as usize;
+                    if align_pad > 0 {
+                        inner_file.write_all(&vec![0u8; align_pad])?;
+                    }
+                    let guide_offset = inner_file.stream_position()?;
+                    inner_file.write_all(guide_bytes)?;
+
+                    let footer =
+                        ContainerFooter::new(guide_offset, guide_len, 0, 0, FOOTER_FLAG_GUIDE_V4);
+                    inner_file.write_all(footer.as_bytes())?;
                 }
-                let guide_offset = inner_file.stream_position()?;
-                inner_file.write_all(guide_bytes)?;
-
-                let footer =
-                    ContainerFooter::new(guide_offset, guide_len, 0, 0, FOOTER_FLAG_GUIDE_V4);
-                inner_file.write_all(footer.as_bytes())?;
                 inner_file.sync_all()?;
             }
 

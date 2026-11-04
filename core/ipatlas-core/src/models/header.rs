@@ -9,6 +9,7 @@ pub const HEADER_SIZE_GEN4: usize = 68;
 pub enum ContainerVersion {
     V4 = 4,
     V5 = 5,
+    V6 = 6,
 }
 
 /// Record family size and indexing capacity.
@@ -29,6 +30,8 @@ pub enum StorageLayout {
     Aos = 0,
     /// Structure of Arrays: separate column arrays [ip_from, ...], [count, ...], [prof_id, ...]
     Soa = 1,
+    /// Chunked Columnar container with SIMD bitpacking and run-length codecs.
+    Columnar = 2,
 }
 
 // ----------------------------------------------------------------------------
@@ -41,6 +44,7 @@ pub enum StorageLayout {
 // 0x0401 / 0x0501: Compact AoS (legacy compatibility alias)
 // 0x0402 / 0x0502: Standard SoA
 // 0x0403 / 0x0503: Compact SoA
+// 0x0404 / 0x0504: Columnar
 // ----------------------------------------------------------------------------
 
 pub const VERSION_V4_STANDARD: u16 = 4; // Legacy V4 (0x0004 or 0x0400)
@@ -49,6 +53,7 @@ pub const VERSION_V4_STANDARD_SOA: u16 = 0x0402;
 pub const VERSION_V4_COMPACT_AOS: u16 = 0x0401; // Legacy 0x0401
 pub const VERSION_V4_COMPACT_SOA: u16 = 0x0403;
 pub const VERSION_V4_COMPACT: u16 = 0x0401; // Legacy V4.1 compact AoS compatibility alias
+pub const VERSION_V4_COLUMNAR: u16 = 0x0404;
 
 pub const RECORD_SIZE_V4_STANDARD: u16 = 12;
 pub const RECORD_SIZE_V4_COMPACT: u16 = 8;
@@ -91,6 +96,11 @@ impl HeaderGen4 {
     }
 
     #[inline(always)]
+    pub fn is_columnar(&self) -> bool {
+        self.version == VERSION_V4_COLUMNAR
+    }
+
+    #[inline(always)]
     pub fn is_compact(&self) -> bool {
         self.record_size == RECORD_SIZE_V4_COMPACT
             || self.version == VERSION_V4_COMPACT
@@ -109,7 +119,9 @@ impl HeaderGen4 {
 
     #[inline(always)]
     pub fn layout(&self) -> StorageLayout {
-        if self.is_soa() {
+        if self.is_columnar() {
+            StorageLayout::Columnar
+        } else if self.is_soa() {
             StorageLayout::Soa
         } else {
             StorageLayout::Aos
@@ -130,12 +142,17 @@ impl HeaderGen4 {
             || self.version == VERSION_V4_COMPACT_AOS
             || self.version == VERSION_V4_COMPACT_SOA)
             && self.record_size == RECORD_SIZE_V4_COMPACT;
-        if !is_std && !is_cmp {
+        let is_col = self.version == VERSION_V4_COLUMNAR;
+        if !is_std && !is_cmp && !is_col {
             return Err("Unsupported database version or mismatched record size");
         }
 
         let total_rec = self.total_records as u64;
-        let expected_records_bytes = total_rec * (self.record_size as u64);
+        let expected_records_bytes = if is_col {
+            0
+        } else {
+            total_rec * (self.record_size as u64)
+        };
         let ranges_end = (HEADER_SIZE_V4 as u64) + expected_records_bytes;
 
         let prof_offset = self.profile_offset as u64;
@@ -185,6 +202,7 @@ pub const VERSION_V5_STANDARD_SOA: u16 = 0x0502;
 pub const VERSION_V5_COMPACT_AOS: u16 = 0x0501; // Legacy 0x0501
 pub const VERSION_V5_COMPACT_SOA: u16 = 0x0503;
 pub const VERSION_V5_COMPACT: u16 = 0x0501; // Legacy V5 compact AoS compatibility alias
+pub const VERSION_V5_COLUMNAR: u16 = 0x0504;
 
 pub const RECORD_SIZE_V6: u16 = 36;
 pub const RECORD_SIZE_IPV6_STANDARD: u16 = 36;
@@ -263,8 +281,15 @@ impl HeaderGen5 {
     }
 
     #[inline(always)]
+    pub fn is_columnar(&self) -> bool {
+        self.version == VERSION_V5_COLUMNAR
+    }
+
+    #[inline(always)]
     pub fn layout(&self) -> StorageLayout {
-        if self.is_soa() {
+        if self.is_columnar() {
+            StorageLayout::Columnar
+        } else if self.is_soa() {
             StorageLayout::Soa
         } else {
             StorageLayout::Aos
@@ -291,7 +316,8 @@ impl HeaderGen5 {
             || self.version == VERSION_V5_COMPACT_AOS
             || self.version == VERSION_V5_COMPACT_SOA)
             && self.record_size_v4 == RECORD_SIZE_V4_COMPACT;
-        if !is_std && !is_cmp {
+        let is_col = self.version == VERSION_V5_COLUMNAR;
+        if !is_std && !is_cmp && !is_col {
             return Err("Unsupported Generation V5 version or mismatched record size");
         }
 
@@ -302,9 +328,13 @@ impl HeaderGen5 {
             return Err("Invalid IPv6 record size (expected 36 bytes or 16 bytes for Split-64)");
         }
 
-        let v4_bytes = (self.total_records_v4 as u64) * (self.record_size_v4 as u64);
-        let v6_bytes = (self.total_records_v6 as u64) * (self.record_size_v6 as u64);
-        let ranges_end = (HEADER_SIZE_V5 as u64) + v4_bytes + v6_bytes;
+        let ranges_end = if is_col {
+            HEADER_SIZE_V5 as u64
+        } else {
+            let v4_bytes = (self.total_records_v4 as u64) * (self.record_size_v4 as u64);
+            let v6_bytes = (self.total_records_v6 as u64) * (self.record_size_v6 as u64);
+            (HEADER_SIZE_V5 as u64) + v4_bytes + v6_bytes
+        };
 
         let prof_offset = self.profile_offset as u64;
         if prof_offset < ranges_end {

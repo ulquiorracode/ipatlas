@@ -253,10 +253,9 @@ impl IpAtlasReader {
     /// Physical memory layout.
     #[inline(always)]
     pub fn layout(&self) -> StorageLayout {
-        if self.is_soa() {
-            StorageLayout::Soa
-        } else {
-            StorageLayout::Aos
+        match &self.header {
+            HeaderVariant::V4(h) => h.layout(),
+            HeaderVariant::V5(h) => h.layout(),
         }
     }
 

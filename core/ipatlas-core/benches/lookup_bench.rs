@@ -261,6 +261,72 @@ fn bench_lookups(c: &mut Criterion) {
         });
     });
 
+    // 6b. Generation 6: Stitch-Data Chunked Columnar Container Benchmark
+    let (_dir_gen6, bin_path_gen6) = {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("bench_db_gen6.csv");
+        let px_path = dir.path().join("bench_px_gen6.csv");
+        let out_bin = dir.path().join("bench_gen6.bin");
+
+        let mut db_file = File::create(&db_path).unwrap();
+        let mut px_file = File::create(&px_path).unwrap();
+
+        let mut curr: u32 = 16_777_216; // 1.0.0.0
+        for i in 0..10_000 {
+            let step = 256;
+            let ip_from = curr;
+            let ip_to = curr + step - 1;
+            curr = ip_to + 1;
+
+            writeln!(
+                db_file,
+                "{},{},US,United States,CA,Los Angeles,34.05,-118.24",
+                ip_from, ip_to
+            )
+            .unwrap();
+
+            if i % 4 == 0 {
+                writeln!(
+                    px_file,
+                    "{},{},VPN,US,United States,CA,Los Angeles,Cloud Provider,host.com,DCH,13335,AS_NAME,2026-01-01,VPN",
+                    ip_from, ip_to
+                )
+                .unwrap();
+            }
+        }
+
+        let opt = OptimizationConfig {
+            layout: ipatlas_core::StorageLayout::Columnar,
+            ..Default::default()
+        };
+
+        let opts = CompilerOptions::new(&out_bin)
+            .geo(Some(&db_path))
+            .proxy(Some(&px_path))
+            .optimization(opt);
+
+        compile(opts).unwrap();
+        (dir, out_bin)
+    };
+    let reader_col = IpAtlasReader::open(&bin_path_gen6).unwrap();
+
+    group.bench_function("columnar_lookup_u32", |b| {
+        b.iter(|| {
+            let res = reader_col.lookup_u32(black_box(target_u32));
+            black_box(res)
+        });
+    });
+
+    let mut col_hit_idx = 0;
+    group.bench_function("columnar_random_hit_u32", |b| {
+        b.iter(|| {
+            let ip = random_hit_ips[col_hit_idx % random_hit_ips.len()];
+            col_hit_idx = col_hit_idx.wrapping_add(1);
+            let res = reader_col.lookup_u32(black_box(ip));
+            black_box(res)
+        });
+    });
+
     // 7. Chunk Size Evaluation for Blocked-Zstd Decompression
     // Compare 4KB (page), 16KB, 64KB (aligned struct boundary: 8192 * 8B), and 256KB
     let raw_records = reader_compact.ranges_compact();

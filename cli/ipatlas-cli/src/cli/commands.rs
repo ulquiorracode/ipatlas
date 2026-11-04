@@ -101,6 +101,7 @@ pub fn run_compile(args: CompileArgs) -> anyhow::Result<()> {
     let layout_label = match opt_config.layout {
         StorageLayout::Aos => "AoS (Array of Structures)",
         StorageLayout::Soa => "SoA (Structure of Arrays)",
+        StorageLayout::Columnar => "Columnar (Chunked SIMD Bitpacked)",
     };
 
     let has_maxmind = args.maxmind_blocks.is_some() || args.maxmind_locations.is_some();
@@ -348,6 +349,7 @@ pub fn run_info(args: InfoArgs) -> anyhow::Result<()> {
         match reader.layout() {
             StorageLayout::Aos => "AoS (Array of Structures)",
             StorageLayout::Soa => "SoA (Structure of Arrays)",
+            StorageLayout::Columnar => "Columnar (Chunked SIMD Bitpacked)",
         }
     );
     println!(

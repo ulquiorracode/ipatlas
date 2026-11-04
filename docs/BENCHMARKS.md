@@ -57,6 +57,7 @@ cargo run --release -- bench dist/ipatlas_goldsrc_firewall_soa.bin -n 1000000
 | **IPAtlas Compact SoA (v0.14.0)** | Country Code Fast Path (`country_code`) | **23,006,276 QPS** | **43.5 ns** (Latency) | **25.3x** | Indirect profile lookup |
 | **IPAtlas Compact AoS (v0.14.0)** | **Flags-Only Fast Path** (`lookup_flags_u32`) | **28,838,306 QPS** | **34.7 ns** (Latency) | **31.7x** | Zero heap allocation, firewall mode (`GeoFlags`) |
 | **IPAtlas Compact SoA (v0.14.0)** | **Flags-Only Fast Path** (`lookup_flags_u32`) | **29,612,958 QPS** | **33.8 ns** (Latency) | **32.5x** | Firewall threat bitmask direct extraction |
+| **IPAtlas Columnar (Gen 4/5)** | Full Geo Record (`lookup_u32`) | **3,315,300 QPS** | **301.6 ns** (Latency) | **3.64x** | Chunked columnar (64-entry L1D blocks), SIMD bitpacked, >80% net space reduction |
 | **IPAtlas Parallel Rayon** | Compact AoS (16 hardware threads) | **117,594,487 QPS** | **8.5 ns** (Throughput-Eq) | **129.3x** | 16-thread aggregate batch processing ($1 / \text{QPS}$) |
 | **stitch-rs Pipeline** | Full Monomorphic U-Cycle Pipeline | **4,159,759 QPS** | **240.4 ns** (Latency) | **4.57x** | Bogon L1 filter + context + threat policy + telemetry |
 
@@ -74,6 +75,8 @@ Measured with Criterion.rs (10,000 intervals, hot-cache evaluation):
 | lookup/compact_v4_1_lookup_u32 | 100 samples | **68.73 ns** | AoS binary search over 10k compact records |
 | lookup/soa_compact_lookup_u32 | 100 samples | **69.43 ns** | SoA columnar binary search over 10k compact records |
 | lookup/flags_only_lookup_u32 | 100 samples | **11.48 ns** | 2-Stage branchless firewall bitmask lookup (AoS, -34% latency) |
+| lookup/columnar_lookup_u32 | 100 samples | **301.63 ns** | Chunked columnar SIMD delta + bitpacking (64-entry block) |
+| lookup/columnar_random_hit_u32 | 100 samples | **343.25 ns** | Non-cached interval hit across columnar chunks |
 | lookup/soa_compact_flags_u32 | 100 samples | **11.61 ns** | 2-Stage branchless firewall bitmask lookup (SoA, -27% latency) |
 | lookup/profile_only_lookup_u32 | 100 samples | **9.61 ns** | 2-Stage zero-alloc raw 20B ProfileGen4 retrieval (sub-10ns barrier) |
 | lookup/is_threat_predicate_u32 | 100 samples | **10.04 ns** | 2-Stage branchless single-cycle threat predicate (-37% latency) |

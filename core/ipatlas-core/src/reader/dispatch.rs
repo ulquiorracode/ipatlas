@@ -48,6 +48,12 @@ pub(crate) enum TableDispatch {
         prof_off: usize,
         count: usize,
     },
+    Columnar {
+        container_offset: usize,
+        directory_offset: usize,
+        chunk_count: usize,
+        count: usize,
+    },
 }
 
 impl TableDispatch {
@@ -212,6 +218,94 @@ impl TableDispatch {
                     return None;
                 }
                 Some((range.ip_from, range.ip_to, range.profile_id as usize))
+            }
+            TableDispatch::Columnar {
+                container_offset,
+                directory_offset,
+                chunk_count,
+                count,
+            } => {
+                if count == 0 || chunk_count == 0 {
+                    return None;
+                }
+
+                let dir_bytes = &storage[directory_offset
+                    ..directory_offset + chunk_count * stitch_data::ChunkDescriptor::SIZE];
+
+                let mut low = 0;
+                let mut high = chunk_count;
+                let mut candidate = None;
+
+                while low < high {
+                    let mid = low + (high - low) / 2;
+                    let offset = mid * stitch_data::ChunkDescriptor::SIZE;
+                    let desc = stitch_data::ChunkDescriptor::parse(
+                        &dir_bytes[offset..offset + stitch_data::ChunkDescriptor::SIZE],
+                    )
+                    .ok()?;
+
+                    if desc.first_key <= ip as u64 {
+                        candidate = Some(desc);
+                        low = mid + 1;
+                    } else {
+                        high = mid;
+                    }
+                }
+
+                let desc = candidate?;
+                let chunk_start = container_offset + desc.file_offset as usize;
+                let chunk_end = chunk_start + desc.compressed_len as usize;
+                let chunk_frame = &storage[chunk_start..chunk_end];
+
+                let (_header, payload) = stitch_data::unpack_frame_unchecked(chunk_frame).ok()?;
+                let index = stitch_data::ColumnSliceIndex::<4>::new(payload).ok()?;
+
+                let row_count = index.row_count();
+                if row_count > 512 {
+                    return None;
+                }
+
+                let col0 = index.column(0)?;
+                let col1 = index.column(1)?;
+                let col2 = index.column(2)?;
+
+                let mut ip_froms = [0u32; 512];
+                stitch_data::decode_u32_column(col0.payload, &mut ip_froms[..row_count]).ok()?;
+
+                let slice = &ip_froms[..row_count];
+                let idx = match slice.binary_search(&ip) {
+                    Ok(pos) => pos,
+                    Err(0) => return None,
+                    Err(pos) => pos - 1,
+                };
+
+                let ip_from = slice[idx];
+
+                // Fast O(1) single-value extraction for column 1 (count) if Direct BitPack
+                let count_val = if !col1.payload.is_empty() && col1.payload[0] == 0x03 {
+                    stitch_data::read_bitpacked_u32_at(&col1.payload[1..], idx, row_count).ok()?
+                } else {
+                    let mut counts = [0u32; 512];
+                    stitch_data::decode_u32_column(col1.payload, &mut counts[..row_count]).ok()?;
+                    counts[idx]
+                };
+
+                let ip_to = ip_from.checked_add(count_val)?.checked_sub(1)?;
+                if ip > ip_to {
+                    return None;
+                }
+
+                // Fast O(1) single-value extraction for column 2 (profile_id) if Direct BitPack
+                let profile_id = if !col2.payload.is_empty() && col2.payload[0] == 0x03 {
+                    stitch_data::read_bitpacked_u32_at(&col2.payload[1..], idx, row_count).ok()?
+                        as usize
+                } else {
+                    let mut profs = [0u32; 512];
+                    stitch_data::decode_u32_column(col2.payload, &mut profs[..row_count]).ok()?;
+                    profs[idx] as usize
+                };
+
+                Some((ip_from, ip_to, profile_id))
             }
             TableDispatch::Empty => None,
         }
