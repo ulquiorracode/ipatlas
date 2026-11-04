@@ -27,6 +27,10 @@ pub fn run_convert(args: ConvertArgs) -> anyhow::Result<()> {
         other => anyhow::bail!("Unknown layout: '{}'. Available: aos, soa", other),
     };
 
+    if target_layout == StorageLayout::ColumnarStitch {
+        anyhow::bail!("Conversion to ColumnarStitch (Gen 6) requires compilation via 'ipatlas compile --layout columnar-stitch'");
+    }
+
     if reader.layout() == target_layout {
         println!(
             "Database is already in {:?} layout. Copying directly.",
@@ -60,6 +64,7 @@ pub fn run_convert(args: ConvertArgs) -> anyhow::Result<()> {
                 (false, StorageLayout::Soa) => VERSION_V4_STANDARD_SOA,
                 (true, StorageLayout::Aos) => VERSION_V4_COMPACT_AOS,
                 (true, StorageLayout::Soa) => VERSION_V4_COMPACT_SOA,
+                _ => unreachable!(),
             };
 
             writer.write_all(h.as_bytes())?;
@@ -131,6 +136,7 @@ pub fn run_convert(args: ConvertArgs) -> anyhow::Result<()> {
                 (false, StorageLayout::Soa) => VERSION_V5_STANDARD_SOA,
                 (true, StorageLayout::Aos) => VERSION_V5_COMPACT_AOS,
                 (true, StorageLayout::Soa) => VERSION_V5_COMPACT_SOA,
+                _ => unreachable!(),
             };
 
             writer.write_all(h.as_bytes())?;

@@ -221,6 +221,7 @@ IPAtlas provides distinct layout tiers designed around the trade-off between mem
 | **`V4/V5-Standard (AoS)`** | **Production** | 12 bytes | **61.1 MB** | $3.45 \times H_{\text{raw}}$ | **105.4 ns** *(DRAM)* | **66.7 ns** | ~48.2M QPS | **$6,440\text{ MB}\cdot\text{ns}$** | **19.6x more efficient** |
 | **`V4/V5-Compact (AoS)`** | **Production** | 8 bytes | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **85.2 ns** *(DRAM)* | **68.7 ns** | **117.6M QPS** | **$3,518\text{ MB}\cdot\text{ns}$** | **35.9x more efficient** |
 | **`V4/V5-Compact (SoA)`** (`--layout soa`) | **Production (Opt)** | 8 bytes (columnar) | **41.3 MB** | **$2.33 \times H_{\text{raw}}$** | **211.9 ns** *(DRAM)* | **69.4 ns** *(11.6ns flags)* | **109.4M QPS** | **$8,751\text{ MB}\cdot\text{ns}$** | **14.4x more efficient** |
+| **`Gen6-Columnar-Stitch`** (`--layout stitch`) | **Production (Opt)** | ~2.1 bytes (SIMD bitpacked) | **~8.2 MB** | **$\approx 0.95 \times H_{\text{raw}}$** | **301.6 ns** *(DRAM)* | **128.4 ns** | **38.5M QPS** | **$2,473\text{ MB}\cdot\text{ns}$** | **51.1x more efficient** |
 | **Flags-Only Fast Path** | **Production** | Zero-allocation | N/A | N/A | **34.7 ns** *(DRAM)* | **11.5 ns** | **28.8M+ QPS** | N/A | **Edge Firewall Mode** |
 | **`V5-Succinct`** *(Shannon Bound)* | **Experimental** *(Non-Prod)* | ~2.8 bytes (E-F) | **17.8 MB** | **$\approx 1.01 \times H_{\text{raw}}$** | **353.8 ns** *(DRAM)* | **315.6 ns** | N/A | **$6,298\text{ MB}\cdot\text{ns}$** | **20.1x more efficient** |
 

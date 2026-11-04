@@ -9,6 +9,7 @@ use crate::models::{
     PROFILE_SIZE_V4, RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD, VERSION_V4_COMPACT_AOS,
     VERSION_V4_COMPACT_SOA, VERSION_V4_STANDARD, VERSION_V4_STANDARD_AOS, VERSION_V4_STANDARD_SOA,
     VERSION_V5_COMPACT_AOS, VERSION_V5_COMPACT_SOA, VERSION_V5_STANDARD, VERSION_V5_STANDARD_SOA,
+    VERSION_V6_COLUMNAR_STITCH,
 };
 use crate::reader::buffer::StorageBuffer;
 use crate::reader::dispatch::{TableDispatch, TableDispatchV6};
@@ -52,7 +53,8 @@ impl ReaderInitializer {
             | 0x0500
             | VERSION_V5_STANDARD_SOA
             | VERSION_V5_COMPACT_AOS
-            | VERSION_V5_COMPACT_SOA => {
+            | VERSION_V5_COMPACT_SOA
+            | VERSION_V6_COLUMNAR_STITCH => {
                 if file_len < HEADER_SIZE_V5 as u64 {
                     return Err(ReaderError::FileTooSmall(file_len));
                 }
@@ -215,71 +217,114 @@ impl ReaderInitializer {
             HeaderVariant::V5(h) => {
                 let total_v4 = h.total_records_v4 as usize;
                 let v4_start = HEADER_SIZE_V5;
-                let v4_end = v4_start + total_v4 * (h.record_size_v4 as usize);
 
-                let disp = if total_v4 == 0 {
-                    TableDispatch::Empty
-                } else if h.is_soa() {
-                    let ip_from_bytes = total_v4 * 4;
-                    <[u32]>::ref_from_bytes(&raw_buf[v4_start..v4_start + ip_from_bytes]).map_err(
-                        |_| ReaderError::Corrupted("Unaligned or invalid SoA ip_from slice"),
+                let (disp, v4_end) = if h.is_columnar_stitch() {
+                    let align_pad = h.record_size_v4 as usize;
+                    let total_v4_span = (h.profile_offset as usize).checked_sub(v4_start).ok_or(
+                        ReaderError::Corrupted("Invalid profile offset in V6 header"),
                     )?;
-                    if h.is_compact_v4() {
-                        let counts_start = v4_start + ip_from_bytes;
-                        let counts_bytes = total_v4 * 2;
-                        let prof_start = counts_start + counts_bytes;
-                        let prof_bytes = total_v4 * 2;
-                        <[u16]>::ref_from_bytes(
-                            &raw_buf[counts_start..counts_start + counts_bytes],
-                        )
+                    let container_len =
+                        total_v4_span
+                            .checked_sub(align_pad)
+                            .ok_or(ReaderError::Corrupted(
+                                "Invalid alignment padding in V6 header",
+                            ))?;
+                    if raw_buf.len() < v4_start + container_len {
+                        return Err(ReaderError::Corrupted(
+                            "Container slice exceeds buffer bounds",
+                        ));
+                    }
+                    let container_slice = &raw_buf[v4_start..v4_start + container_len];
+                    let stitch_reader = stitch_data::ContainerReader::open(container_slice)
                         .map_err(|_| {
-                            ReaderError::Corrupted("Unaligned or invalid SoA count slice")
+                            ReaderError::Corrupted("Invalid Stitch Data container in V6 database")
                         })?;
-                        <[u16]>::ref_from_bytes(&raw_buf[prof_start..prof_start + prof_bytes])
+                    let chunk_count = stitch_reader.chunk_count();
+                    let directory_offset = v4_start + (stitch_reader.directory_offset() as usize);
+                    let d = TableDispatch::V6ColumnarStitch {
+                        container_offset: v4_start,
+                        directory_offset,
+                        chunk_count,
+                        count: total_v4,
+                    };
+                    (d, h.profile_offset as usize)
+                } else {
+                    let v4_end = v4_start + total_v4 * (h.record_size_v4 as usize);
+                    let d = if total_v4 == 0 {
+                        TableDispatch::Empty
+                    } else if h.is_soa() {
+                        let ip_from_bytes = total_v4 * 4;
+                        <[u32]>::ref_from_bytes(&raw_buf[v4_start..v4_start + ip_from_bytes])
                             .map_err(|_| {
-                                ReaderError::Corrupted("Unaligned or invalid SoA profile_id slice")
+                                ReaderError::Corrupted("Unaligned or invalid SoA ip_from slice")
                             })?;
-                        TableDispatch::V5CompactSoa {
-                            ip_from_off: v4_start,
-                            counts_off: counts_start,
-                            prof_off: prof_start,
+                        if h.is_compact_v4() {
+                            let counts_start = v4_start + ip_from_bytes;
+                            let counts_bytes = total_v4 * 2;
+                            let prof_start = counts_start + counts_bytes;
+                            let prof_bytes = total_v4 * 2;
+                            <[u16]>::ref_from_bytes(
+                                &raw_buf[counts_start..counts_start + counts_bytes],
+                            )
+                            .map_err(|_| {
+                                ReaderError::Corrupted("Unaligned or invalid SoA count slice")
+                            })?;
+                            <[u16]>::ref_from_bytes(&raw_buf[prof_start..prof_start + prof_bytes])
+                                .map_err(|_| {
+                                    ReaderError::Corrupted(
+                                        "Unaligned or invalid SoA profile_id slice",
+                                    )
+                                })?;
+                            TableDispatch::V5CompactSoa {
+                                ip_from_off: v4_start,
+                                counts_off: counts_start,
+                                prof_off: prof_start,
+                                count: total_v4,
+                            }
+                        } else {
+                            let to_start = v4_start + ip_from_bytes;
+                            let to_bytes = total_v4 * 4;
+                            let prof_start = to_start + to_bytes;
+                            let prof_bytes = total_v4 * 4;
+                            <[u32]>::ref_from_bytes(&raw_buf[to_start..to_start + to_bytes])
+                                .map_err(|_| {
+                                    ReaderError::Corrupted("Unaligned or invalid SoA ip_to slice")
+                                })?;
+                            <[u32]>::ref_from_bytes(&raw_buf[prof_start..prof_start + prof_bytes])
+                                .map_err(|_| {
+                                    ReaderError::Corrupted(
+                                        "Unaligned or invalid SoA profile_id slice",
+                                    )
+                                })?;
+                            TableDispatch::V5StandardSoa {
+                                ip_from_off: v4_start,
+                                ip_to_off: to_start,
+                                prof_off: prof_start,
+                                count: total_v4,
+                            }
+                        }
+                    } else if h.is_compact_v4() {
+                        <[Ipv4RangeCompact]>::ref_from_bytes(&raw_buf[v4_start..v4_end]).map_err(
+                            |_| {
+                                ReaderError::Corrupted(
+                                    "Unaligned or invalid Ipv4RangeCompact slice",
+                                )
+                            },
+                        )?;
+                        TableDispatch::V5CompactAos {
+                            offset: v4_start,
                             count: total_v4,
                         }
                     } else {
-                        let to_start = v4_start + ip_from_bytes;
-                        let to_bytes = total_v4 * 4;
-                        let prof_start = to_start + to_bytes;
-                        let prof_bytes = total_v4 * 4;
-                        <[u32]>::ref_from_bytes(&raw_buf[to_start..to_start + to_bytes]).map_err(
-                            |_| ReaderError::Corrupted("Unaligned or invalid SoA ip_to slice"),
+                        <[Ipv4Range]>::ref_from_bytes(&raw_buf[v4_start..v4_end]).map_err(
+                            |_| ReaderError::Corrupted("Unaligned or invalid Ipv4Range slice"),
                         )?;
-                        <[u32]>::ref_from_bytes(&raw_buf[prof_start..prof_start + prof_bytes])
-                            .map_err(|_| {
-                                ReaderError::Corrupted("Unaligned or invalid SoA profile_id slice")
-                            })?;
-                        TableDispatch::V5StandardSoa {
-                            ip_from_off: v4_start,
-                            ip_to_off: to_start,
-                            prof_off: prof_start,
+                        TableDispatch::V5StandardAos {
+                            offset: v4_start,
                             count: total_v4,
                         }
-                    }
-                } else if h.is_compact_v4() {
-                    <[Ipv4RangeCompact]>::ref_from_bytes(&raw_buf[v4_start..v4_end]).map_err(
-                        |_| ReaderError::Corrupted("Unaligned or invalid Ipv4RangeCompact slice"),
-                    )?;
-                    TableDispatch::V5CompactAos {
-                        offset: v4_start,
-                        count: total_v4,
-                    }
-                } else {
-                    <[Ipv4Range]>::ref_from_bytes(&raw_buf[v4_start..v4_end]).map_err(|_| {
-                        ReaderError::Corrupted("Unaligned or invalid Ipv4Range slice")
-                    })?;
-                    TableDispatch::V5StandardAos {
-                        offset: v4_start,
-                        count: total_v4,
-                    }
+                    };
+                    (d, v4_end)
                 };
 
                 let total_v6 = h.total_records_v6 as usize;
@@ -440,7 +485,7 @@ impl ReaderInitializer {
                 };
                 GuideTableV4::from_ranges_standard(ranges)
             }
-            TableDispatch::Empty => GuideTableV4::new(),
+            TableDispatch::Empty | TableDispatch::V6ColumnarStitch { .. } => GuideTableV4::new(),
         }
     }
 }

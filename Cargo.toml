@@ -26,6 +26,7 @@ zerocopy = { version = "0.8", features = ["derive"] }
 memchr = "2.7"
 thiserror = "2.0"
 stitch-rs = { git = "https://github.com/ulquiorracode/stitch-rs.git", tag = "v0.3.0", default-features = false }
+stitch-data = { git = "https://github.com/stitch-rs/stitch-data.git", branch = "dev", default-features = false, features = ["std"] }
 rayon = "1.10"
 clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"

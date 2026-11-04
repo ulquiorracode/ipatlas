@@ -1182,6 +1182,7 @@ dependencies = [
  "memmap2",
  "pulp",
  "rayon",
+ "stitch-data",
  "stitch-rs",
  "tempfile",
  "thiserror",
@@ -1829,11 +1830,39 @@ version = "0.3.0"
 source = "git+https://github.com/ulquiorracode/stitch-rs.git?tag=v0.3.0#0086c990a9be218e2f03220f8c6a0653a76944da"
 
 [[package]]
+name = "stitch-core"
+version = "0.3.0"
+source = "git+https://github.com/stitch-rs/stitch-framework.git?branch=main#bb2eceeccf783f6f0d78740813306c08e4dc9e02"
+
+[[package]]
+name = "stitch-data"
+version = "0.1.0"
+source = "git+https://github.com/stitch-rs/stitch-data.git?branch=dev#0d3301ea1a0df8b272bde132ac60b260890814f6"
+dependencies = [
+ "stitch-data-core",
+ "stitch-data-transforms",
+]
+
+[[package]]
+name = "stitch-data-core"
+version = "0.1.0"
+source = "git+https://github.com/stitch-rs/stitch-data.git?branch=dev#0d3301ea1a0df8b272bde132ac60b260890814f6"
+
+[[package]]
+name = "stitch-data-transforms"
+version = "0.1.0"
+source = "git+https://github.com/stitch-rs/stitch-data.git?branch=dev#0d3301ea1a0df8b272bde132ac60b260890814f6"
+dependencies = [
+ "stitch-core 0.3.0 (git+https://github.com/stitch-rs/stitch-framework.git?branch=main)",
+ "stitch-data-core",
+]
+
+[[package]]
 name = "stitch-rs"
 version = "0.3.0"
 source = "git+https://github.com/ulquiorracode/stitch-rs.git?tag=v0.3.0#0086c990a9be218e2f03220f8c6a0653a76944da"
 dependencies = [
- "stitch-core",
+ "stitch-core 0.3.0 (git+https://github.com/ulquiorracode/stitch-rs.git?tag=v0.3.0)",
 ]
 
 [[package]]

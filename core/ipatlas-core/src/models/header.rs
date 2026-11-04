@@ -9,6 +9,7 @@ pub const HEADER_SIZE_GEN4: usize = 68;
 pub enum ContainerVersion {
     V4 = 4,
     V5 = 5,
+    V6 = 6,
 }
 
 /// Record family size and indexing capacity.
@@ -29,6 +30,8 @@ pub enum StorageLayout {
     Aos = 0,
     /// Structure of Arrays: separate column arrays [ip_from, ...], [count, ...], [prof_id, ...]
     Soa = 1,
+    /// Chunked Columnar container powered by Stitch Data Engine.
+    ColumnarStitch = 2,
 }
 
 // ----------------------------------------------------------------------------
@@ -186,6 +189,9 @@ pub const VERSION_V5_COMPACT_AOS: u16 = 0x0501; // Legacy 0x0501
 pub const VERSION_V5_COMPACT_SOA: u16 = 0x0503;
 pub const VERSION_V5_COMPACT: u16 = 0x0501; // Legacy V5 compact AoS compatibility alias
 
+/// Generation V6: Chunked Columnar Stitch-Data Container.
+pub const VERSION_V6_COLUMNAR_STITCH: u16 = 0x0601;
+
 pub const RECORD_SIZE_V6: u16 = 36;
 pub const RECORD_SIZE_IPV6_STANDARD: u16 = 36;
 pub const RECORD_SIZE_IPV6_COMPACT: u16 = 16;
@@ -263,8 +269,15 @@ impl HeaderGen5 {
     }
 
     #[inline(always)]
+    pub fn is_columnar_stitch(&self) -> bool {
+        self.version == VERSION_V6_COLUMNAR_STITCH
+    }
+
+    #[inline(always)]
     pub fn layout(&self) -> StorageLayout {
-        if self.is_soa() {
+        if self.is_columnar_stitch() {
+            StorageLayout::ColumnarStitch
+        } else if self.is_soa() {
             StorageLayout::Soa
         } else {
             StorageLayout::Aos
@@ -291,8 +304,9 @@ impl HeaderGen5 {
             || self.version == VERSION_V5_COMPACT_AOS
             || self.version == VERSION_V5_COMPACT_SOA)
             && self.record_size_v4 == RECORD_SIZE_V4_COMPACT;
-        if !is_std && !is_cmp {
-            return Err("Unsupported Generation V5 version or mismatched record size");
+        let is_stitch = self.version == VERSION_V6_COLUMNAR_STITCH;
+        if !is_std && !is_cmp && !is_stitch {
+            return Err("Unsupported Generation V5/V6 version or mismatched record size");
         }
 
         if self.total_records_v6 > 0
@@ -302,9 +316,13 @@ impl HeaderGen5 {
             return Err("Invalid IPv6 record size (expected 36 bytes or 16 bytes for Split-64)");
         }
 
-        let v4_bytes = (self.total_records_v4 as u64) * (self.record_size_v4 as u64);
-        let v6_bytes = (self.total_records_v6 as u64) * (self.record_size_v6 as u64);
-        let ranges_end = (HEADER_SIZE_V5 as u64) + v4_bytes + v6_bytes;
+        let ranges_end = if is_stitch {
+            HEADER_SIZE_V5 as u64
+        } else {
+            let v4_bytes = (self.total_records_v4 as u64) * (self.record_size_v4 as u64);
+            let v6_bytes = (self.total_records_v6 as u64) * (self.record_size_v6 as u64);
+            (HEADER_SIZE_V5 as u64) + v4_bytes + v6_bytes
+        };
 
         let prof_offset = self.profile_offset as u64;
         if prof_offset < ranges_end {
