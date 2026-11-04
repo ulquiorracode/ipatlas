@@ -55,7 +55,7 @@ fn test_gen6_columnar_stitch_e2e_compilation_and_lookup() {
     px10_file.flush().unwrap();
 
     let opt = OptimizationConfig {
-        layout: StorageLayout::ColumnarStitch,
+        layout: StorageLayout::Columnar,
         ..Default::default()
     };
 
@@ -71,7 +71,7 @@ fn test_gen6_columnar_stitch_e2e_compilation_and_lookup() {
     // Open via zero-copy reader
     let reader = IpAtlasReader::open(&out_bin).unwrap();
     assert_eq!(reader.len_v4(), 2_000);
-    assert_eq!(reader.layout(), StorageLayout::ColumnarStitch);
+    assert_eq!(reader.layout(), StorageLayout::Columnar);
 
     // Query 1: IP in range 0 (1.0.0.10)
     let res0 = reader.lookup_u32(16_777_216 + 10).unwrap();

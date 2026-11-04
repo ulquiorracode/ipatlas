@@ -296,7 +296,7 @@ fn bench_lookups(c: &mut Criterion) {
         }
 
         let opt = OptimizationConfig {
-            layout: ipatlas_core::StorageLayout::ColumnarStitch,
+            layout: ipatlas_core::StorageLayout::Columnar,
             ..Default::default()
         };
 

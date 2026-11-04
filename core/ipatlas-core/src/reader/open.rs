@@ -6,10 +6,10 @@ use zerocopy::FromBytes;
 use crate::models::{
     ContainerFooter, HeaderV4, HeaderV5, Ipv4Range, Ipv4RangeCompact, Ipv6Range, Ipv6RangeSplit64,
     ProfileGen4, FOOTER_INDEX_SIZE, FOOTER_MAGIC, HEADER_SIZE_V4, HEADER_SIZE_V5, MAGIC,
-    PROFILE_SIZE_V4, RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD, VERSION_V4_COMPACT_AOS,
-    VERSION_V4_COMPACT_SOA, VERSION_V4_STANDARD, VERSION_V4_STANDARD_AOS, VERSION_V4_STANDARD_SOA,
-    VERSION_V5_COMPACT_AOS, VERSION_V5_COMPACT_SOA, VERSION_V5_STANDARD, VERSION_V5_STANDARD_SOA,
-    VERSION_V6_COLUMNAR_STITCH,
+    PROFILE_SIZE_V4, RECORD_SIZE_V4_COMPACT, RECORD_SIZE_V4_STANDARD, VERSION_V4_COLUMNAR,
+    VERSION_V4_COMPACT_AOS, VERSION_V4_COMPACT_SOA, VERSION_V4_STANDARD, VERSION_V4_STANDARD_AOS,
+    VERSION_V4_STANDARD_SOA, VERSION_V5_COLUMNAR, VERSION_V5_COMPACT_AOS, VERSION_V5_COMPACT_SOA,
+    VERSION_V5_STANDARD, VERSION_V5_STANDARD_SOA,
 };
 use crate::reader::buffer::StorageBuffer;
 use crate::reader::dispatch::{TableDispatch, TableDispatchV6};
@@ -54,7 +54,7 @@ impl ReaderInitializer {
             | VERSION_V5_STANDARD_SOA
             | VERSION_V5_COMPACT_AOS
             | VERSION_V5_COMPACT_SOA
-            | VERSION_V6_COLUMNAR_STITCH => {
+            | VERSION_V5_COLUMNAR => {
                 if file_len < HEADER_SIZE_V5 as u64 {
                     return Err(ReaderError::FileTooSmall(file_len));
                 }
@@ -93,7 +93,8 @@ impl ReaderInitializer {
             | VERSION_V4_STANDARD_AOS
             | VERSION_V4_STANDARD_SOA
             | VERSION_V4_COMPACT_AOS
-            | VERSION_V4_COMPACT_SOA => {
+            | VERSION_V4_COMPACT_SOA
+            | VERSION_V4_COLUMNAR => {
                 let h = HeaderV4::read_from_bytes(&mmap[..HEADER_SIZE_V4])
                     .map_err(|_| ReaderError::Corrupted("Failed to parse V4 header bytes"))?;
                 h.validate(file_len).map_err(ReaderError::Corrupted)?;
@@ -110,6 +111,38 @@ impl ReaderInitializer {
                 let total = h.total_records as usize;
                 let disp = if total == 0 {
                     TableDispatch::Empty
+                } else if h.is_columnar() {
+                    let align_pad = h.record_size as usize;
+                    let total_v4_span = (h.profile_offset as usize)
+                        .checked_sub(HEADER_SIZE_V4)
+                        .ok_or(ReaderError::Corrupted(
+                            "Invalid profile offset in V4 header",
+                        ))?;
+                    let container_len =
+                        total_v4_span
+                            .checked_sub(align_pad)
+                            .ok_or(ReaderError::Corrupted(
+                                "Invalid alignment padding in V4 header",
+                            ))?;
+                    if raw_buf.len() < HEADER_SIZE_V4 + container_len {
+                        return Err(ReaderError::Corrupted(
+                            "Container slice exceeds buffer bounds",
+                        ));
+                    }
+                    let container_slice = &raw_buf[HEADER_SIZE_V4..HEADER_SIZE_V4 + container_len];
+                    let stitch_reader = stitch_data::ContainerReader::open(container_slice)
+                        .map_err(|_| {
+                            ReaderError::Corrupted("Invalid Stitch Data container in V4 database")
+                        })?;
+                    let chunk_count = stitch_reader.chunk_count();
+                    let directory_offset =
+                        HEADER_SIZE_V4 + (stitch_reader.directory_offset() as usize);
+                    TableDispatch::Columnar {
+                        container_offset: HEADER_SIZE_V4,
+                        directory_offset,
+                        chunk_count,
+                        count: total,
+                    }
                 } else if h.is_soa() {
                     let start = HEADER_SIZE_V4;
                     let ip_from_bytes = total * 4;
@@ -218,16 +251,16 @@ impl ReaderInitializer {
                 let total_v4 = h.total_records_v4 as usize;
                 let v4_start = HEADER_SIZE_V5;
 
-                let (disp, v4_end) = if h.is_columnar_stitch() {
+                let (disp, v4_end) = if h.is_columnar() {
                     let align_pad = h.record_size_v4 as usize;
                     let total_v4_span = (h.profile_offset as usize).checked_sub(v4_start).ok_or(
-                        ReaderError::Corrupted("Invalid profile offset in V6 header"),
+                        ReaderError::Corrupted("Invalid profile offset in V5 header"),
                     )?;
                     let container_len =
                         total_v4_span
                             .checked_sub(align_pad)
                             .ok_or(ReaderError::Corrupted(
-                                "Invalid alignment padding in V6 header",
+                                "Invalid alignment padding in V5 header",
                             ))?;
                     if raw_buf.len() < v4_start + container_len {
                         return Err(ReaderError::Corrupted(
@@ -237,11 +270,11 @@ impl ReaderInitializer {
                     let container_slice = &raw_buf[v4_start..v4_start + container_len];
                     let stitch_reader = stitch_data::ContainerReader::open(container_slice)
                         .map_err(|_| {
-                            ReaderError::Corrupted("Invalid Stitch Data container in V6 database")
+                            ReaderError::Corrupted("Invalid Stitch Data container in V5 database")
                         })?;
                     let chunk_count = stitch_reader.chunk_count();
                     let directory_offset = v4_start + (stitch_reader.directory_offset() as usize);
-                    let d = TableDispatch::V6ColumnarStitch {
+                    let d = TableDispatch::Columnar {
                         container_offset: v4_start,
                         directory_offset,
                         chunk_count,
@@ -485,7 +518,7 @@ impl ReaderInitializer {
                 };
                 GuideTableV4::from_ranges_standard(ranges)
             }
-            TableDispatch::Empty | TableDispatch::V6ColumnarStitch { .. } => GuideTableV4::new(),
+            TableDispatch::Empty | TableDispatch::Columnar { .. } => GuideTableV4::new(),
         }
     }
 }

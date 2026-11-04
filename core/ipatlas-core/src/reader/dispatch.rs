@@ -48,7 +48,7 @@ pub(crate) enum TableDispatch {
         prof_off: usize,
         count: usize,
     },
-    V6ColumnarStitch {
+    Columnar {
         container_offset: usize,
         directory_offset: usize,
         chunk_count: usize,
@@ -219,7 +219,7 @@ impl TableDispatch {
                 }
                 Some((range.ip_from, range.ip_to, range.profile_id as usize))
             }
-            TableDispatch::V6ColumnarStitch {
+            TableDispatch::Columnar {
                 container_offset,
                 directory_offset,
                 chunk_count,

@@ -27,8 +27,8 @@ pub fn run_convert(args: ConvertArgs) -> anyhow::Result<()> {
         other => anyhow::bail!("Unknown layout: '{}'. Available: aos, soa", other),
     };
 
-    if target_layout == StorageLayout::ColumnarStitch {
-        anyhow::bail!("Conversion to ColumnarStitch (Gen 6) requires compilation via 'ipatlas compile --layout columnar-stitch'");
+    if target_layout == StorageLayout::Columnar {
+        anyhow::bail!("Conversion to Columnar layout requires compilation via 'ipatlas compile --layout columnar'");
     }
 
     if reader.layout() == target_layout {

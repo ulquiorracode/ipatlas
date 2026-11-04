@@ -167,11 +167,11 @@ impl OptimizationConfig {
                 }
                 "soa" | "structure-of-arrays" => self.layout = StorageLayout::Soa,
                 "aos" | "array-of-structures" => self.layout = StorageLayout::Aos,
-                "columnar-stitch" | "stitch" | "gen6" | "v6" => {
-                    self.layout = StorageLayout::ColumnarStitch;
+                "columnar" | "columnar-stitch" | "stitch" | "gen6" | "v6" => {
+                    self.layout = StorageLayout::Columnar;
                 }
                 "zstd" | "embedded-zstd" => self.embedded_zstd = true,
-                other => return Err(format!("Unknown optimization rule or level: '{}'. Available: 0, 1, 2, 3, coalesce, normalize-strings, lossy-coords, split64-v6, prune-empty, collapse-threats, compact-ranges, soa, aos, embedded-zstd", other)),
+                other => return Err(format!("Unknown optimization rule or level: '{}'. Available: 0, 1, 2, 3, coalesce, normalize-strings, lossy-coords, split64-v6, prune-empty, collapse-threats, compact-ranges, soa, aos, columnar, embedded-zstd", other)),
             }
         }
         Ok(())

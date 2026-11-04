@@ -12,8 +12,8 @@ use crate::models::{
     OptimizationConfig, ProfileGen4, RecordFamily, StorageLayout, FOOTER_FLAG_GUIDE_V4,
     HEADER_FLAG_EMBEDDED_ZSTD, HEADER_SIZE_GEN5, MAGIC, PROFILE_SIZE_GEN4,
     RECORD_SIZE_IPV4_COMPACT, RECORD_SIZE_IPV4_STANDARD, RECORD_SIZE_IPV6_COMPACT,
-    RECORD_SIZE_IPV6_STANDARD, VERSION_V5_COMPACT_AOS, VERSION_V5_COMPACT_SOA,
-    VERSION_V5_STANDARD_AOS, VERSION_V5_STANDARD_SOA, VERSION_V6_COLUMNAR_STITCH,
+    RECORD_SIZE_IPV6_STANDARD, VERSION_V5_COLUMNAR, VERSION_V5_COMPACT_AOS, VERSION_V5_COMPACT_SOA,
+    VERSION_V5_STANDARD_AOS, VERSION_V5_STANDARD_SOA,
 };
 use stitch_data::prelude::*;
 use stitch_data::{encode_u32_column, ColumnCodecTag, ColumnarBlockWriter, ContainerWriter};
@@ -226,7 +226,7 @@ impl DatabaseWriter {
             RECORD_SIZE_IPV6_STANDARD
         };
 
-        let is_stitch = self.opt.layout == StorageLayout::ColumnarStitch;
+        let is_stitch = self.opt.layout == StorageLayout::Columnar;
 
         let mut stitch_container_buf = Vec::new();
         if is_stitch {
@@ -340,7 +340,7 @@ impl DatabaseWriter {
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
         }
 
-        let is_stitch = self.opt.layout == StorageLayout::ColumnarStitch;
+        let is_stitch = self.opt.layout == StorageLayout::Columnar;
         let align_pad = if is_stitch {
             (4 - (stitch_container_buf.len() % 4)) % 4
         } else {
@@ -356,7 +356,7 @@ impl DatabaseWriter {
         };
 
         let version = if is_stitch {
-            VERSION_V6_COLUMNAR_STITCH
+            VERSION_V5_COLUMNAR
         } else {
             match (is_compact, is_soa) {
                 (true, true) => VERSION_V5_COMPACT_SOA,

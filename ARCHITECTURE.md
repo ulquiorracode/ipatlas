@@ -68,9 +68,8 @@ To eliminate ambiguity across protocol versions and database file format specifi
 
 | Category | Identifier | Scope & Definition | Physical Representation / Invariants |
 | :--- | :--- | :--- | :--- |
-| **Container Generation** | **`Gen4`** (`HeaderGen4`) | Single-stack IPv4 database format. | Header size 68 bytes. Magic `ATLS`, versions `0x0400`–`0x0403`. |
-| **Container Generation** | **`Gen5`** (`HeaderGen5`) | Dual-stack IPv4 + IPv6 unified database format. | Header size 80 bytes. Magic `ATLS`, versions `0x0500`–`0x0503`. |
-| **Container Generation** | **`Gen6`** (`HeaderGen5` + `stitch-data`) | High-density chunked columnar container format powered by `stitch-data`. | Header size 80 bytes. Magic `ATLS`, version `0x0601` (`ColumnarStitch`). Self-describing chunk index directory, SIMD bitpacked columns, >80% net compression, sub-350ns query latency. |
+| **Container Generation** | **`Gen4`** (`HeaderGen4`) | Single-stack IPv4 database format. | Header size 68 bytes. Magic `ATLS`, versions `0x0400`–`0x0404`. Supports AoS, SoA, and Columnar layouts. |
+| **Container Generation** | **`Gen5`** (`HeaderGen5`) | Dual-stack IPv4 + IPv6 unified database format. | Header size 80 bytes. Magic `ATLS`, versions `0x0500`–`0x0504`. Supports AoS, SoA, and Columnar layouts. |
 | **Network Protocol** | **`Ipv4`** (32-bit) | IPv4 address space ($[0, 2^{32}-1]$). | Evaluated via `u32`, `Ipv4Addr`. |
 | **Network Protocol** | **`Ipv6`** (128-bit) | IPv6 address space ($[0, 2^{128}-1]$). | Evaluated via `u128`, `Ipv6Addr`. |
 | **Range Model** | **`Ipv4Range`** | Standard 12-byte contiguous IPv4 interval. | `ip_from: u32, ip_to: u32, profile_id: u32`. Universal 32-bit profile index. |
@@ -150,7 +149,7 @@ src/
 3. **`Ipv6RangeSplit64` (16 bytes/interval)**: `from_hi: u64, count_hi: u32, profile_id: u32`. Truncates lower 64 bits to eliminate cache-line straddling (4 records per 64B cache line, -55.6% RAM).
 4. **`EytzingerSearch` (BFS Array Layout)**: Cache-friendly binary search tree layout with `_mm_prefetch` for predictable latency and elimination of branch mispredictions (**13.5 ns** IPv4 / **16.3 ns** IPv6).
 5. **`SuccinctIntervalTable` (Elias-Fano)**: Monotone prefix bitvector encoding reaching ~100% of the Shannon entropy floor (~17.8 MB active RAM).
-6. **`ColumnarStitch` (Gen 6 Chunked Columnar Container)**: Universal chunked columnar container powered by `stitch-data`. Blocks of 64 intervals compressed with SIMD bitpacking and direct encoding, achieving >80% space reduction with sub-350 ns random query latency. Zero heap allocation during queries.
+6. **`Columnar` (Chunked Columnar Container)**: Universal chunked columnar container layout (Gen 4 `0x0404` / Gen 5 `0x0504`). Blocks of 64 intervals compressed with SIMD bitpacking and run-length codecs, achieving >80% space reduction with sub-350 ns random query latency. Zero heap allocation during queries.
 
 ### 5. Monomorphic U-Cycle Pipeline (`stitch-rs`)
 
