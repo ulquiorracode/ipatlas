@@ -16,6 +16,8 @@ memmap2 = "0.9"
 zerocopy = { version = "0.8", features = ["derive"] }
 memchr = "2.7"
 thiserror = "2.0"
+odd-int = { workspace = true }
+narrow-ptr = { workspace = true }
 stitch-rs = { git = "https://github.com/ulquiorracode/stitch-rs.git", tag = "v0.3.0", default-features = false }
 stitch-data = { workspace = true }
 rayon = { version = "1.10", optional = true }

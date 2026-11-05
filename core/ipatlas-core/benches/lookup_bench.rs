@@ -537,6 +537,108 @@ fn bench_lookups(c: &mut Criterion) {
         });
     });
 
+    // 11. Generation 6 (narrow-ptr + odd-int + zero-copy string arena)
+    let gen6_ranges: Vec<ipatlas_core::models::Ipv4RangeV6> = {
+        let raw = reader.ranges_ipv4();
+        raw.iter()
+            .enumerate()
+            .map(|(i, r)| {
+                ipatlas_core::models::Ipv4RangeV6::new(r.ip_from, r.ip_to, (i % 100) as i16)
+            })
+            .collect()
+    };
+
+    let gen6_string_blob = b"United States\0Los Angeles\0California\0Cloud Provider\0";
+    let gen6_profiles: Vec<ipatlas_core::models::ProfileGen6> = (0..100)
+        .map(|_| {
+            ipatlas_core::models::ProfileGen6::new(
+                13335,
+                1,
+                *b"US",
+                3405,
+                -11824,
+                odd_int::I24::from_i64(14).unwrap(), // Los Angeles
+                odd_int::I24::from_i64(37).unwrap(), // Cloud Provider
+            )
+        })
+        .collect();
+
+    let gen6_reader =
+        ipatlas_core::reader::Gen6Reader::new(&gen6_ranges, &gen6_profiles, gen6_string_blob);
+
+    group.bench_function("gen6_narrow_odd_lookup_v4_hit", |b| {
+        b.iter(|| {
+            let res = gen6_reader.lookup_v4(black_box(target_u32));
+            black_box(res)
+        });
+    });
+
+    group.bench_function("gen6_narrow_odd_lookup_v4_random_hits_1024", |b| {
+        b.iter(|| {
+            for &ip in &random_hit_ips {
+                let res = gen6_reader.lookup_v4(black_box(ip));
+                black_box(res);
+            }
+        });
+    });
+
+    // 12. Generation 6 Compact Series (7-byte Range + 8-byte Edge / 12-byte Geo)
+    let gen6_compact_ranges: Vec<ipatlas_core::models::Ipv4RangeV6Compact> = {
+        let raw = reader.ranges_ipv4();
+        raw.iter()
+            .enumerate()
+            .map(|(i, r)| {
+                ipatlas_core::models::Ipv4RangeV6Compact::new(
+                    r.ip_from,
+                    odd_int::I24::from_i64((i % 100) as i64).unwrap(),
+                )
+            })
+            .collect()
+    };
+
+    let gen6_edge_profiles: Vec<ipatlas_core::models::ProfileGen6Edge> = (0..100)
+        .map(|_| ipatlas_core::models::ProfileGen6Edge::new(13335, 1, *b"US"))
+        .collect();
+
+    let gen6_edge_reader = ipatlas_core::reader::Gen6CompactReader::new(
+        &gen6_compact_ranges,
+        &gen6_edge_profiles,
+        &[],
+    );
+
+    group.bench_function("gen6_compact_edge_lookup_v4_hit", |b| {
+        b.iter(|| {
+            let res = gen6_edge_reader.lookup_edge(black_box(target_u32));
+            black_box(res)
+        });
+    });
+
+    group.bench_function("gen6_compact_edge_random_hits_1024", |b| {
+        b.iter(|| {
+            for &ip in &random_hit_ips {
+                let res = gen6_edge_reader.lookup_edge(black_box(ip));
+                black_box(res);
+            }
+        });
+    });
+
+    let gen6_geo_profiles: Vec<ipatlas_core::models::ProfileGen6Compact> = (0..100)
+        .map(|_| ipatlas_core::models::ProfileGen6Compact::new(13335, 1, *b"US", 3, 9))
+        .collect();
+
+    let gen6_geo_reader = ipatlas_core::reader::Gen6CompactReader::new(
+        &gen6_compact_ranges,
+        &gen6_geo_profiles,
+        gen6_string_blob,
+    );
+
+    group.bench_function("gen6_compact_geo_lookup_v4_hit", |b| {
+        b.iter(|| {
+            let res = gen6_geo_reader.lookup_geo(black_box(target_u32));
+            black_box(res)
+        });
+    });
+
     group.finish();
 }
 

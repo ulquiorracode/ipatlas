@@ -1180,6 +1180,8 @@ dependencies = [
  "libc",
  "memchr",
  "memmap2",
+ "narrow-ptr",
+ "odd-int",
  "pulp",
  "rayon",
  "stitch-data",
@@ -1361,6 +1363,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
+name = "narrow-ptr"
+version = "0.1.0"
+dependencies = [
+ "odd-int",
+]
+
+[[package]]
 name = "num-complex"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1383,6 +1392,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "odd-int"
+version = "0.1.0"
+dependencies = [
+ "zerocopy",
 ]
 
 [[package]]
