@@ -1308,6 +1308,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
+name = "machine-core"
+version = "0.1.0"
+source = "git+https://github.com/ulquiorracode/machine-rs.git?branch=dev#50047338ec0b784cb0f8a7c91355b9cf840e783d"
+
+[[package]]
 name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1855,22 +1860,38 @@ source = "git+https://github.com/stitch-rs/stitch-framework.git?branch=main#bb2e
 [[package]]
 name = "stitch-data"
 version = "0.1.0"
-source = "git+https://github.com/stitch-rs/stitch-data.git?branch=dev#0d3301ea1a0df8b272bde132ac60b260890814f6"
+source = "git+https://github.com/stitch-rs/stitch-data.git?branch=dev#060e495dcc46c9870ffe8fcdaa1cfb1b27ceceaa"
 dependencies = [
  "stitch-data-core",
+ "stitch-data-layout",
  "stitch-data-transforms",
 ]
 
 [[package]]
 name = "stitch-data-core"
 version = "0.1.0"
-source = "git+https://github.com/stitch-rs/stitch-data.git?branch=dev#0d3301ea1a0df8b272bde132ac60b260890814f6"
+source = "git+https://github.com/stitch-rs/stitch-data.git?branch=dev#060e495dcc46c9870ffe8fcdaa1cfb1b27ceceaa"
+dependencies = [
+ "machine-core",
+ "narrow-ptr",
+ "odd-int",
+]
+
+[[package]]
+name = "stitch-data-layout"
+version = "0.1.0"
+source = "git+https://github.com/stitch-rs/stitch-data.git?branch=dev#060e495dcc46c9870ffe8fcdaa1cfb1b27ceceaa"
+dependencies = [
+ "stitch-data-core",
+]
 
 [[package]]
 name = "stitch-data-transforms"
 version = "0.1.0"
-source = "git+https://github.com/stitch-rs/stitch-data.git?branch=dev#0d3301ea1a0df8b272bde132ac60b260890814f6"
+source = "git+https://github.com/stitch-rs/stitch-data.git?branch=dev#060e495dcc46c9870ffe8fcdaa1cfb1b27ceceaa"
 dependencies = [
+ "narrow-ptr",
+ "odd-int",
  "stitch-core 0.3.0 (git+https://github.com/stitch-rs/stitch-framework.git?branch=main)",
  "stitch-data-core",
 ]
