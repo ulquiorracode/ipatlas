@@ -24,7 +24,10 @@ fn main() {
     let csv_proxy = dir.path().join("proxy.csv");
 
     let num_records = 50_000;
-    println!("Generating benchmark dataset with {} IPv4 ranges...", num_records);
+    println!(
+        "Generating benchmark dataset with {} IPv4 ranges...",
+        num_records
+    );
 
     let mut geo_f = File::create(&csv_geo).unwrap();
     let mut proxy_f = File::create(&csv_proxy).unwrap();
@@ -150,7 +153,10 @@ fn main() {
         let mut f = File::create(&out_gen6_compact_geo).unwrap();
         f.write_all(b"STDC_GEN6_GEO\0\0\0").unwrap();
         for i in 0..num_records {
-            let r = Ipv4RangeV6Compact::new(i * 256, I24::from_i64((i % num_profiles as u32) as i64).unwrap());
+            let r = Ipv4RangeV6Compact::new(
+                i * 256,
+                I24::from_i64((i % num_profiles as u32) as i64).unwrap(),
+            );
             f.write_all(r.as_bytes()).unwrap();
         }
         for i in 0..num_profiles {
@@ -166,7 +172,10 @@ fn main() {
         let mut f = File::create(&out_gen6_compact_edge).unwrap();
         f.write_all(b"STDC_GEN6_EDGE\0\0").unwrap();
         for i in 0..num_records {
-            let r = Ipv4RangeV6Compact::new(i * 256, I24::from_i64((i % num_profiles as u32) as i64).unwrap());
+            let r = Ipv4RangeV6Compact::new(
+                i * 256,
+                I24::from_i64((i % num_profiles as u32) as i64).unwrap(),
+            );
             f.write_all(r.as_bytes()).unwrap();
         }
         for _ in 0..num_profiles {
@@ -184,15 +193,51 @@ fn main() {
     let s_g6_edge = std::fs::metadata(&out_gen6_compact_edge).unwrap().len();
 
     println!("\n=========================================================================================");
-    println!("                       DATABASE BINARY FILE SIZES ({} RECORDS)                    ", num_records);
-    println!("=========================================================================================");
+    println!(
+        "                       DATABASE BINARY FILE SIZES ({} RECORDS)                    ",
+        num_records
+    );
+    println!(
+        "========================================================================================="
+    );
     println!("Format Variant                          File Size (Bytes)    File Size (KB)    Savings vs Gen4");
-    println!("-----------------------------------------------------------------------------------------");
-    println!("Gen 4 Standard (12B Range + 20B Profile)   {:>10} B       {:>8.2} KB           Baseline", s_g4_std, s_g4_std as f64 / 1024.0);
-    println!("Gen 4.1 Compact (8B Range + 20B Profile)   {:>10} B       {:>8.2} KB           -{:.1}%", s_g4_cmp, s_g4_cmp as f64 / 1024.0, (1.0 - (s_g4_cmp as f64 / s_g4_std as f64)) * 100.0);
-    println!("Gen 6 Standard (10B Range + 18B Profile)   {:>10} B       {:>8.2} KB           -{:.1}%", s_g6_std, s_g6_std as f64 / 1024.0, (1.0 - (s_g6_std as f64 / s_g4_std as f64)) * 100.0);
-    println!("Gen 6 Compact Geo (7B Range + 12B Profile) {:>10} B       {:>8.2} KB           -{:.1}%", s_g6_geo, s_g6_geo as f64 / 1024.0, (1.0 - (s_g6_geo as f64 / s_g4_std as f64)) * 100.0);
-    println!("Gen 6 Compact Edge (7B Range + 8B Profile) {:>10} B       {:>8.2} KB           -{:.1}%", s_g6_edge, s_g6_edge as f64 / 1024.0, (1.0 - (s_g6_edge as f64 / s_g4_std as f64)) * 100.0);
-    println!("Gen 5 Embedded Zstd (Compressed Archive)   {:>10} B       {:>8.2} KB           -{:.1}%", s_g5_zstd, s_g5_zstd as f64 / 1024.0, (1.0 - (s_g5_zstd as f64 / s_g4_std as f64)) * 100.0);
+    println!(
+        "-----------------------------------------------------------------------------------------"
+    );
+    println!(
+        "Gen 4 Standard (12B Range + 20B Profile)   {:>10} B       {:>8.2} KB           Baseline",
+        s_g4_std,
+        s_g4_std as f64 / 1024.0
+    );
+    println!(
+        "Gen 4.1 Compact (8B Range + 20B Profile)   {:>10} B       {:>8.2} KB           -{:.1}%",
+        s_g4_cmp,
+        s_g4_cmp as f64 / 1024.0,
+        (1.0 - (s_g4_cmp as f64 / s_g4_std as f64)) * 100.0
+    );
+    println!(
+        "Gen 6 Standard (10B Range + 18B Profile)   {:>10} B       {:>8.2} KB           -{:.1}%",
+        s_g6_std,
+        s_g6_std as f64 / 1024.0,
+        (1.0 - (s_g6_std as f64 / s_g4_std as f64)) * 100.0
+    );
+    println!(
+        "Gen 6 Compact Geo (7B Range + 12B Profile) {:>10} B       {:>8.2} KB           -{:.1}%",
+        s_g6_geo,
+        s_g6_geo as f64 / 1024.0,
+        (1.0 - (s_g6_geo as f64 / s_g4_std as f64)) * 100.0
+    );
+    println!(
+        "Gen 6 Compact Edge (7B Range + 8B Profile) {:>10} B       {:>8.2} KB           -{:.1}%",
+        s_g6_edge,
+        s_g6_edge as f64 / 1024.0,
+        (1.0 - (s_g6_edge as f64 / s_g4_std as f64)) * 100.0
+    );
+    println!(
+        "Gen 5 Embedded Zstd (Compressed Archive)   {:>10} B       {:>8.2} KB           -{:.1}%",
+        s_g5_zstd,
+        s_g5_zstd as f64 / 1024.0,
+        (1.0 - (s_g5_zstd as f64 / s_g4_std as f64)) * 100.0
+    );
     println!("=========================================================================================\n");
 }
