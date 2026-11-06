@@ -7,6 +7,7 @@
 
 use narrow_ptr::{RelPtr, ScaledRelPtr};
 use odd_int::I24;
+use stitch_data::{assert_cache_friendly, CacheSuperBlock};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 /// Generation 6 standard IPv4 range entry (10 bytes total vs 12 bytes legacy).
@@ -153,6 +154,14 @@ impl ProfileGen6Edge {
         }
     }
 }
+
+// Compile-time assertion: ProfileGen6Edge (8 bytes) must never straddle 64-byte cache lines.
+assert_cache_friendly!(ProfileGen6Edge);
+
+/// Tiled cache-line superblock for 12-byte `ProfileGen6Compact`.
+///
+/// 16 items of 12B = 192 bytes = exactly 3 cache lines (3 * 64B) with 0 bytes waste.
+pub type ProfileGen6CompactSuperBlock = CacheSuperBlock<ProfileGen6Compact, 16>;
 
 /// Generation 6 Compact Geo profile record (12 bytes).
 ///

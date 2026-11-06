@@ -1,3 +1,4 @@
+use stitch_data::assert_cache_friendly;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 /// Standard 12-byte contiguous range interval mapping an IPv4 range to a 32-bit profile ID.
@@ -68,6 +69,9 @@ impl Ipv4RangeCompact {
         }
     }
 }
+
+// Compile-time assertion: Ipv4RangeCompact (8 bytes) must never straddle 64-byte cache lines.
+assert_cache_friendly!(Ipv4RangeCompact);
 
 /// Legacy alias for [`Ipv4RangeCompact`].
 pub type RangeV4Compact = Ipv4RangeCompact;
@@ -175,3 +179,6 @@ impl Ipv6RangeSplit64 {
 
 /// Compact 16-byte alias for [`Ipv6RangeSplit64`].
 pub type Ipv6RangeCompact = Ipv6RangeSplit64;
+
+// Compile-time assertion: Ipv6RangeSplit64 (16 bytes) must never straddle 64-byte cache lines.
+assert_cache_friendly!(Ipv6RangeSplit64);
