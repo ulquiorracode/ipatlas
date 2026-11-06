@@ -12,8 +12,7 @@ use std::io::Write;
 use tempfile::tempdir;
 
 use ipatlas_core::models::{
-    Ipv4Range, Ipv4RangeCompact, Ipv4RangeV6, Ipv4RangeV6Compact, ProfileGen4, ProfileGen6,
-    ProfileGen6Compact, ProfileGen6Edge,
+    Ipv4RangeV6, Ipv4RangeV6Compact, ProfileGen6, ProfileGen6Compact, ProfileGen6Edge,
 };
 use odd_int::I24;
 use zerocopy::IntoBytes;
@@ -132,7 +131,7 @@ fn main() {
             let r = Ipv4RangeV6::new(i * 256, i * 256 + 255, (i % num_profiles as u32) as i16);
             f.write_all(r.as_bytes()).unwrap();
         }
-        for i in 0..num_profiles {
+        for _ in 0..num_profiles {
             let p = ProfileGen6::new(
                 13335,
                 1,
@@ -159,7 +158,7 @@ fn main() {
             );
             f.write_all(r.as_bytes()).unwrap();
         }
-        for i in 0..num_profiles {
+        for _ in 0..num_profiles {
             let p = ProfileGen6Compact::new(13335, 1, *b"US", 3, 9);
             f.write_all(p.as_bytes()).unwrap();
         }
