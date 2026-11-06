@@ -21,6 +21,9 @@ repository = "https://github.com/ulquiorracode/ipatlas"
 [workspace.dependencies]
 ipatlas-core = { path = "core/ipatlas-core", version = "0.15.0" }
 
+odd-int = { git = "https://github.com/ulquiorracode/odd-int-rs.git", branch = "dev", default-features = false, features = ["zerocopy"] }
+narrow-ptr = { git = "https://github.com/ulquiorracode/narrow-ptr-rs.git", branch = "dev", default-features = false, features = ["odd-int"] }
+
 memmap2 = "0.9"
 zerocopy = { version = "0.8", features = ["derive"] }
 memchr = "2.7"

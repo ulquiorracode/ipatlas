@@ -1,6 +1,7 @@
 pub mod crc;
 pub mod features;
 pub mod footer;
+pub mod gen6;
 pub mod header;
 pub mod optimization;
 pub mod presets;
@@ -13,6 +14,7 @@ pub use features::FeatureMask;
 pub use footer::{
     ContainerFooter, FOOTER_FLAG_BOGON_RLE, FOOTER_FLAG_GUIDE_V4, FOOTER_INDEX_SIZE, FOOTER_MAGIC,
 };
+pub use gen6::{Ipv4RangeV6, Ipv4RangeV6Compact, ProfileGen6, ProfileGen6Compact, ProfileGen6Edge};
 pub use header::{
     ContainerVersion, HeaderGen4, HeaderGen5, HeaderV4, HeaderV5, RecordFamily, StorageLayout,
     HEADER_FLAG_EMBEDDED_ZSTD, HEADER_FLAG_SOA_V6, HEADER_SIZE_GEN4, HEADER_SIZE_GEN5,

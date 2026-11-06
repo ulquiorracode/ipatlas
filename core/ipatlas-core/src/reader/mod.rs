@@ -2,6 +2,7 @@ pub(crate) mod branchless;
 pub mod buffer;
 pub(crate) mod dispatch;
 pub mod error;
+pub mod gen6;
 pub mod guide;
 #[cfg(feature = "hot-reload")]
 pub mod hot_reload;
@@ -11,6 +12,7 @@ pub mod prefetch;
 pub(crate) mod strings;
 
 pub use error::ReaderError;
+pub use gen6::{Gen6CompactReader, Gen6Reader};
 #[cfg(feature = "hot-reload")]
 pub use hot_reload::HotReloadDatabase;
 pub use mmap_reader::{HeaderVariant, IpAtlasReader};
